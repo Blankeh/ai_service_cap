@@ -47,7 +47,11 @@ class CloudflareService:
                 return True
 
         except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            logger.warning(f"Send failed ({exc}), queuing {group_id}")
+            logger.warning(
+                "Send failed for %s (crowd=%d): %s — queuing for retry",
+                group_id, payload.get('crowd_count', '?'), exc,
+                exc_info=True,
+            )
             self.queue_repo.enqueue(bus_id, group_id, payload)
             return False
 
@@ -79,4 +83,8 @@ class CloudflareService:
                 delay      = min(30 * (2 ** record.retry_count), 3600)
                 next_retry = (datetime.utcnow() + timedelta(seconds=delay)).isoformat()
                 self.queue_repo.increment_retry(record.id, next_retry)
-                logger.warning(f"Retry {record.retry_count + 1} failed for {record.group_id}, next in {delay}s")
+                logger.warning(
+                    "Retry %d failed for %s, next in %ds: %s",
+                    record.retry_count + 1, record.group_id, delay, exc,
+                    exc_info=True,
+                )

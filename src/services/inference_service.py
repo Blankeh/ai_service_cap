@@ -1,5 +1,7 @@
 import logging
 import threading
+import time
+
 import numpy as np
 from ultralytics import YOLO
 
@@ -16,18 +18,26 @@ class InferenceService:
     @property
     def model(self) -> YOLO:
         if self._model is None:
-            logger.info(f"Loading YOLO model from {self.model_path}")
+            logger.info("Loading YOLO model from %s", self.model_path)
+            if self.model_path.endswith(".pt"):
+                # Custom CBAM architecture — register attention modules before loading
+                try:
+                    from ..core.custom_modules import register_custom_modules
+                    register_custom_modules()
+                except Exception as exc:
+                    logger.warning("Could not register custom modules: %s", exc)
             self._model = YOLO(self.model_path)
+            logger.info("YOLO model loaded successfully: %s", self.model_path)
         return self._model
 
     def reload(self, new_path: str) -> None:
         """Hot-swap the model. Validates the new model before replacing."""
-        logger.info(f"Loading replacement model from {new_path}")
+        logger.info("Loading replacement model from %s", new_path)
         new_model = YOLO(new_path)  # raises if the file is invalid
         with self._lock:
             self._model = new_model
             self.model_path = new_path
-        logger.info(f"Model reloaded: {new_path}")
+        logger.info("Model reloaded: %s", new_path)
 
     def count_crowd(self, img: np.ndarray) -> dict:
         """
@@ -44,11 +54,14 @@ class InferenceService:
         """
         with self._lock:
             current_model = self.model
+
+        t0 = time.perf_counter()
         results = current_model.predict(
             img,
             conf=self.confidence_threshold,
             verbose=False,
         )
+        elapsed_ms = (time.perf_counter() - t0) * 1000
 
         detections = []
         for result in results:
@@ -60,7 +73,20 @@ class InferenceService:
                     "class": result.names[int(box.cls[0])],
                 })
 
+        crowd_count = len(detections)
+        logger.info(
+            "Inference: crowd=%d  conf_threshold=%.2f  elapsed=%.1f ms  img=%dx%d",
+            crowd_count, self.confidence_threshold, elapsed_ms,
+            img.shape[1], img.shape[0],
+        )
+        if elapsed_ms > 2000:
+            logger.warning(
+                "Inference took %.1f ms — Pi 4 may be overloaded (CPU threads, thermal throttle?)",
+                elapsed_ms,
+            )
+
         return {
-            "crowd_count": len(detections),
+            "crowd_count": crowd_count,
             "detections": detections,
         }
+

@@ -1,6 +1,5 @@
 import asyncio
 import logging
-from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -8,97 +7,98 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class _PaneBuffer:
-    counts: list[int] = field(default_factory=list)
-
-    def push(self, count: int):
-        self.counts.append(count)
-
-    def average(self) -> int:
-        return round(sum(self.counts) / len(self.counts)) if self.counts else 0
-
-
-@dataclass
 class _BusBuffer:
     bus_id: str
-    panes:  dict[str, _PaneBuffer] = field(default_factory=dict)
-    latest_timestamp: str = ""
+    counts: list[int]       = field(default_factory=list)
+    panes:  list[list[str]] = field(default_factory=list)
+    latest_timestamp: str   = ""
 
-    def push(self, pane: str, count: int, timestamp: str):
-        if pane not in self.panes:
-            self.panes[pane] = _PaneBuffer()
-        self.panes[pane].push(count)
+    def push(self, panes: list[str], count: int, timestamp: str):
+        self.counts.append(count)
+        self.panes.append(panes)
         self.latest_timestamp = timestamp
 
-    def summarise(self, group_id: str) -> dict:
-        pane_counts = {pane: buf.average() for pane, buf in self.panes.items()}
-        return {
-            "group_id":    group_id,
-            "bus_id":      self.bus_id,
-            "timestamp":   self.latest_timestamp,
-            "panes":       pane_counts,
-            "total_crowd": sum(pane_counts.values()),
-        }
+    def latest_count(self) -> int:
+        return self.counts[-1] if self.counts else 0
 
     def clear(self):
+        self.counts.clear()
         self.panes.clear()
         self.latest_timestamp = ""
 
 
 class AggregatorService:
     """
-    Buffers crowd counts per bus per pane.
+    Buffers crowd counts per bus and flushes to Cloudflare every flush_interval seconds.
 
-    On each frame upload, push(bus_id, pane, count, timestamp) is called.
-
-    Every flush_interval seconds the background loop calls flush(), which:
-      - For each bus, averages per-pane counts across all frames received
-      - Builds a grouped payload and forwards it to CloudflareService
-      - Clears the buffer
-
-    group_id format: "{bus_id}_{UTC bucket timestamp}"
-    Bucket size = flush_interval (one group per flush window).
+    Spike detection: if the latest count differs from the last sent count by more
+    than spike_threshold, that bus is flushed immediately without waiting for the
+    next scheduled flush.
     """
 
-    def __init__(self, flush_interval: int = 60):
-        self.flush_interval = flush_interval
-        self._buffers: dict[str, _BusBuffer] = {}  # keyed by bus_id
-        self._cloudflare_svc = None
+    def __init__(self, cloudflare_svc, flush_interval: int = 60, spike_threshold: int = 5):
+        self.flush_interval  = flush_interval
+        self.spike_threshold = spike_threshold
+        self._cloudflare_svc = cloudflare_svc
+        self._buffers:    dict[str, _BusBuffer] = {}
+        self._last_sent:  dict[str, int]        = {}  # bus_id → last crowd_count sent
 
-    def set_cloudflare_svc(self, svc):
-        self._cloudflare_svc = svc
-
-    def push(self, bus_id: str, pane: str, count: int, timestamp: str):
-        """Called on every frame upload."""
+    async def push(self, bus_id: str, panes: list[str], count: int, timestamp: str):
         if bus_id not in self._buffers:
             self._buffers[bus_id] = _BusBuffer(bus_id=bus_id)
-        self._buffers[bus_id].push(pane, count, timestamp)
+
+        self._buffers[bus_id].push(panes, count, timestamp)
+
+        last = self._last_sent.get(bus_id)
+        if last is not None and abs(count - last) >= self.spike_threshold:
+            logger.warning(
+                "[Aggregator] Spike detected on bus=%s: %d → %d (Δ%+d) — flushing immediately",
+                bus_id, last, count, count - last,
+            )
+            await self._flush_bus(bus_id)
+
+    async def _flush_bus(self, bus_id: str):
+        buf = self._buffers.get(bus_id)
+        if not buf or not buf.counts:
+            return
+
+        avg        = buf.latest_count()
+        panes      = sorted({p for reading in buf.panes for p in reading})
+        flush_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+        payload = {
+            "group_id":     f"{bus_id}_{flush_time}",
+            "bus_id":       bus_id,
+            "timestamp":    buf.latest_timestamp,
+            "panes":        panes,
+            "crowd_count":  avg,
+            "sample_count": len(buf.counts),
+        }
+
+        await self._cloudflare_svc.send(payload)
+        self._last_sent[bus_id] = avg
+        buf.clear()
 
     async def flush(self):
+        """Flush all buses — called by the 60-second loop."""
         if not self._buffers:
             return
 
-        flush_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-
         for bus_id, buf in list(self._buffers.items()):
-            if not buf.panes:
-                continue
-
-            group_id = f"{bus_id}_{flush_time}"
-            summary  = buf.summarise(group_id)
-
-            logger.info(
-                f"[Aggregator] bus={bus_id} group={group_id} "
-                f"panes={summary['panes']} total={summary['total_crowd']}"
-            )
-
-            await self._cloudflare_svc.send(summary)
-            buf.clear()
+            if buf.counts:
+                avg = buf.latest_count()
+                logger.info(
+                    "[Aggregator] Scheduled flush: bus=%s crowd=%d (latest of %d samples)",
+                    bus_id, avg, len(buf.counts),
+                )
+                await self._flush_bus(bus_id)
 
     async def run_loop(self):
+        logger.info("[Aggregator] Flush loop started (interval=%ds, spike_threshold=%d)",
+                    self.flush_interval, self.spike_threshold)
         while True:
             await asyncio.sleep(self.flush_interval)
             try:
                 await self.flush()
             except Exception as exc:
-                logger.error(f"[Aggregator] Flush error: {exc}")
+                logger.error("[Aggregator] Flush error: %s", exc)

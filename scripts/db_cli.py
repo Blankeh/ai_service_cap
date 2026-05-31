@@ -65,7 +65,7 @@ def cmd_cameras_add(args):
         print(f"Camera {args.camera_id!r} already registered — use 'assign' to update.")
         return
 
-    camera_repo.register_or_refresh(args.camera_id)
+    camera_repo.register_or_touch(args.camera_id)
 
     if args.bus and args.pane:
         camera_repo.assign(args.camera_id, args.bus, args.pane)

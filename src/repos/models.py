@@ -10,7 +10,6 @@ class Camera(SQLModel, table=True):
     camera_id:     str           = Field(primary_key=True)
     bus_id:        Optional[str] = Field(default=None)
     pane:          Optional[str] = Field(default=None)
-    token:         Optional[str] = Field(default=None, unique=True)
     registered_at: str           = Field(default_factory=lambda: datetime.utcnow().isoformat())
     last_seen:     str           = Field(default_factory=lambda: datetime.utcnow().isoformat())
 

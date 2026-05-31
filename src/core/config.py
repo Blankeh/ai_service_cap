@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     # Database — single SQLite file, all tables
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///data/app.db")
 
+    # Aggregator — how often to flush buffered counts to Cloudflare
+    aggregator_flush_interval:  int = int(os.getenv("AGGREGATOR_FLUSH_INTERVAL", "60"))
+    # Spike threshold — immediate flush if crowd changes by this many people
+    aggregator_spike_threshold: int = int(os.getenv("AGGREGATOR_SPIKE_THRESHOLD", "5"))
+
     # Frame grouper
     group_window_ms: int = int(os.getenv("GROUP_WINDOW_MS", "1000"))  # deadline after first frame arrives
     group_bucket_size: int = int(os.getenv("GROUP_BUCKET_SIZE", "2"))  # must match ESP32 capture interval (seconds)
@@ -30,6 +35,10 @@ class Settings(BaseSettings):
     # Server
     host: str = os.getenv("HOST", "0.0.0.0")
     port: int = int(os.getenv("PORT", "8000"))
+
+    # Logging
+    log_level: str = os.getenv("LOG_LEVEL", "INFO")
+    log_dir: str   = os.getenv("LOG_DIR", "logs")
 
     class Config:
         env_file = ".env"

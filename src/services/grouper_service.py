@@ -10,11 +10,8 @@ Example with bucket_size=2, capture_interval=2s:
 
   cam-rear   captured_at=1002.080  → bucket=1002  ← different group
 
-This is reliable even with variable network latency because grouping is based
-on WHEN the image was taken (NTP), not when it arrived at the server.
-
-A short deadline (group_window_ms) after the first frame of a bucket arrives
-gives late frames time to show up before processing fires.
+Cameras are pre-configured and ship with their bus_id and pane already set.
+The grouper collects all panes that arrive within group_window_ms, then fires.
 """
 
 import asyncio
@@ -30,17 +27,17 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class _PendingFrame:
-    raw_bytes: bytes
-    timestamp: str
-    captured_at: int  # Unix seconds (from NTP)
+    raw_bytes:  bytes
+    timestamp:  str
+    captured_at: int
 
 
 @dataclass
 class _BusGroup:
-    bus_id: str
-    bucket: int                                          # Unix bucket key
-    frames: dict[str, _PendingFrame] = field(default_factory=dict)  # pane → frame
-    timer_task: Optional[asyncio.Task] = field(default=None, compare=False)
+    bus_id:     str
+    bucket:     int
+    frames:     dict[str, _PendingFrame] = field(default_factory=dict)  # pane → frame
+    timer_task: Optional[asyncio.Task]   = field(default=None, compare=False)
 
 
 class FrameGrouper:
@@ -48,46 +45,34 @@ class FrameGrouper:
         self,
         image_svc,
         inference_svc,
-        cloudflare_svc,
-        camera_repo,
+        aggregator_svc,
         group_window_ms: int = 500,
-        bucket_size: int = 2,           # must match ESP32 capture interval (seconds)
+        bucket_size:     int = 2,
     ):
-        self.image_svc      = image_svc
-        self.inference_svc  = inference_svc
-        self.cloudflare_svc = cloudflare_svc
-        self.camera_repo    = camera_repo
+        self.image_svc       = image_svc
+        self.inference_svc   = inference_svc
+        self.aggregator_svc  = aggregator_svc
         self.group_window_ms = group_window_ms
-        self.bucket_size    = bucket_size
-
-        # keyed by (bus_id, bucket)
+        self.bucket_size     = bucket_size
         self._groups: dict[tuple[str, int], _BusGroup] = {}
 
     def _bucket(self, captured_at: int) -> int:
-        """Round down to the nearest bucket boundary."""
         return (captured_at // self.bucket_size) * self.bucket_size
-
-    def _expected_panes(self, bus_id: str) -> set[str]:
-        cameras = self.camera_repo.list_all()
-        return {c.pane for c in cameras if c.bus_id == bus_id and c.pane}
 
     async def add_frame(
         self,
-        bus_id: str,
-        pane: str,
-        raw_bytes: bytes,
-        timestamp: str,
+        bus_id:      str,
+        pane:        str,
+        raw_bytes:   bytes,
+        timestamp:   str,
         captured_at: Optional[int] = None,
     ) -> dict:
         """
         Buffer a frame into its NTP bucket group.
-        Returns immediately — processing happens in the background.
-
-        captured_at: Unix timestamp from ESP32 NTP (X-Captured-At header).
-                     Falls back to current server time if not provided.
+        Returns immediately — processing fires after group_window_ms deadline.
         """
-        unix_ts  = captured_at or int(datetime.now(timezone.utc).timestamp())
-        bucket   = self._bucket(unix_ts)
+        unix_ts   = captured_at or int(datetime.now(timezone.utc).timestamp())
+        bucket    = self._bucket(unix_ts)
         group_key = (bus_id, bucket)
 
         if group_key not in self._groups:
@@ -100,27 +85,18 @@ class FrameGrouper:
             captured_at=unix_ts,
         )
 
-        expected = self._expected_panes(bus_id)
-        received = set(group.frames.keys())
-
-        if expected and received >= expected:
-            # All panes present — fire immediately
-            if group.timer_task and not group.timer_task.done():
-                group.timer_task.cancel()
-            asyncio.create_task(self._process(group_key))
-        elif group.timer_task is None or group.timer_task.done():
-            # Start deadline timer — process whatever arrives before it fires
-            group.timer_task = asyncio.create_task(
-                self._wait_and_process(group_key)
+        if group.timer_task is None or group.timer_task.done():
+            logger.debug(
+                "[Grouper] bus=%s bucket=%d: starting %dms deadline timer (panes so far: %s)",
+                bus_id, bucket, self.group_window_ms, sorted(group.frames),
             )
+            group.timer_task = asyncio.create_task(self._wait_and_process(group_key))
 
         return {
             "bus_id":   bus_id,
             "bucket":   bucket,
             "pane":     pane,
-            "received": sorted(received),
-            "expected": sorted(expected),
-            "grouped":  True,
+            "received": sorted(group.frames),
         }
 
     async def _wait_and_process(self, group_key: tuple[str, int]):
@@ -132,27 +108,28 @@ class FrameGrouper:
         if not group or not group.frames:
             return
 
-        bus_id    = group.bus_id
-        panes     = sorted(group.frames.keys())
+        bus_id   = group.bus_id
+        panes    = sorted(group.frames.keys())
         timestamp = max(f.timestamp for f in group.frames.values())
-        group_id  = f"{bus_id}_{datetime.fromtimestamp(group.bucket, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')}"
+        group_id  = (
+            f"{bus_id}_"
+            f"{datetime.fromtimestamp(group.bucket, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')}"
+        )
 
-        logger.info(f"[Grouper] Processing bus={bus_id} bucket={group.bucket} panes={panes}")
+        logger.info("[Grouper] Processing bus=%s bucket=%d panes=%s", bus_id, group.bucket, panes)
 
-        enhanced_frames = []
+        enhanced = []
         for pane in panes:
             try:
-                img = self.image_svc.enhance(group.frames[pane].raw_bytes)
-                enhanced_frames.append(img)
+                enhanced.append(self.image_svc.enhance(group.frames[pane].raw_bytes))
             except Exception as exc:
-                logger.warning(f"[Grouper] Skipping pane={pane}: {exc}")
+                logger.warning("[Grouper] Skipping pane=%s bus=%s: %s", pane, bus_id, exc)
 
-        if not enhanced_frames:
-            logger.error(f"[Grouper] No valid frames for {group_id}")
+        if not enhanced:
+            logger.error("[Grouper] No valid frames for %s", group_id)
             return
 
-        # Stitch panes side by side → YOLO sees the full bus interior
-        stitched    = cv2.hconcat(enhanced_frames) if len(enhanced_frames) > 1 else enhanced_frames[0]
+        stitched    = cv2.hconcat(enhanced) if len(enhanced) > 1 else enhanced[0]
         result      = self.inference_svc.count_crowd(stitched)
         crowd_count = result["crowd_count"]
 
@@ -164,5 +141,5 @@ class FrameGrouper:
             "crowd_count": crowd_count,
         }
 
-        logger.info(f"[Grouper] {group_id} crowd={crowd_count} ({len(enhanced_frames)} pane(s))")
-        await self.cloudflare_svc.send(payload)
+        logger.info("[Grouper] %s crowd=%d (%d pane(s))", group_id, crowd_count, len(enhanced))
+        await self.aggregator_svc.push(bus_id, panes, crowd_count, timestamp)
