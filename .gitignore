@@ -49,3 +49,5 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 *.db
+config.h
+.pio

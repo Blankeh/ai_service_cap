@@ -31,10 +31,9 @@ def get_repos():
 # ── Commands ──────────────────────────────────────────────────────────────────
 
 def cmd_init(args):
-    camera_repo, queue_repo = get_repos()
-    print(f"[OK] cameras DB : {settings.camera_db_path}")
-    print(f"[OK] queue DB   : {settings.queue_db_path}")
-    print("Both databases initialised.")
+    get_repos()
+    print(f"[OK] database : {settings.database_url}")
+    print("Database initialised.")
 
 
 def cmd_cameras_list(args):
@@ -91,18 +90,16 @@ def cmd_queue_list(args):
     if not rows:
         return
 
-    fmt = "{:<5} {:<22} {:<10} {:<8} {:<6} {:<5} {}"
-    print(fmt.format("ID", "CAMERA ID", "BUS ID", "PANE", "COUNT", "RETRY", "TIMESTAMP"))
+    fmt = "{:<5} {:<10} {:<5} {:<28} {}"
+    print(fmt.format("ID", "BUS ID", "RETRY", "NEXT RETRY", "GROUP ID"))
     print("-" * 80)
     for r in rows:
         print(fmt.format(
             r.id,
-            r.camera_id,
             r.bus_id,
-            r.pane,
-            r.crowd_count,
             r.retry_count,
-            r.timestamp[:19],
+            r.next_retry_at[:19],
+            r.group_id,
         ))
 
 
@@ -110,7 +107,7 @@ def cmd_queue_clear(args):
     _, queue_repo = get_repos()
     rows = queue_repo.get_due()
     for r in rows:
-        queue_repo.delete(r["id"])
+        queue_repo.delete(r.id)
     print(f"[OK] Cleared {len(rows)} record(s) from queue.")
 
 

@@ -16,10 +16,8 @@ import httpx
 import numpy as np
 import cv2
 
-BASE_URL  = "http://localhost:8000/api/v1"
-CAMERA_ID = "TEST-CAM-01"
-BUS_ID    = "BUS-001"
-PANE      = "front"
+BASE_URL = "http://localhost:8000/api/v1"
+PANE     = "front"
 
 
 def make_test_jpeg(width: int = 640, height: int = 480) -> bytes:
@@ -34,13 +32,9 @@ def make_test_jpeg(width: int = 640, height: int = 480) -> bytes:
     return buf.tobytes()
 
 
-def upload(base_url: str, jpeg_bytes: bytes, camera_id: str, bus_id: str, pane: str,
+def upload(base_url: str, jpeg_bytes: bytes, device_id: str,
            captured_at: int | None = None) -> dict:
-    headers = {
-        "X-Camera-Id": camera_id,
-        "X-Bus-Id":    bus_id,
-        "X-Pane":      pane,
-    }
+    headers = {}
     if captured_at:
         headers["X-Captured-At"] = str(captured_at)
 
@@ -48,6 +42,7 @@ def upload(base_url: str, jpeg_bytes: bytes, camera_id: str, bus_id: str, pane: 
         f"{base_url}/upload",
         headers=headers,
         files={"file": ("frame.jpg", io.BytesIO(jpeg_bytes), "image/jpeg")},
+        data={"device_id": device_id},
         timeout=30,
     )
     r.raise_for_status()
@@ -56,7 +51,7 @@ def upload(base_url: str, jpeg_bytes: bytes, camera_id: str, bus_id: str, pane: 
 
 def run(base_url: str, image_path: str | None, panes: list[str]):
     print(f"Target : {base_url}")
-    print(f"Bus    : {BUS_ID}  panes={panes}\n")
+    print(f"Panes  : {panes}\n")
 
     # ── Health check ──────────────────────────────────────────────────────────
     print("1. Health check...")
@@ -81,11 +76,10 @@ def run(base_url: str, image_path: str | None, panes: list[str]):
     captured_at = int(time.time())
     print(f"\n3. Uploading {len(panes)} pane(s)  captured_at={captured_at}...")
 
-    for i, pane in enumerate(panes):
-        cam_id = f"TEST-CAM-{i+1:02d}"
-        body   = upload(base_url, jpeg_bytes, cam_id, BUS_ID, pane, captured_at)
+    for pane in panes:
+        body = upload(base_url, jpeg_bytes, pane, captured_at)
         print(f"\n   [{pane}]")
-        print(f"     camera_id : {body['camera_id']}")
+        print(f"     device_id : {body['device_id']}")
         print(f"     bucket    : {body['bucket']}")
         print(f"     received  : {body['received']}")
 

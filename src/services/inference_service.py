@@ -19,13 +19,6 @@ class InferenceService:
     def model(self) -> YOLO:
         if self._model is None:
             logger.info("Loading YOLO model from %s", self.model_path)
-            if self.model_path.endswith(".pt"):
-                # Custom CBAM architecture — register attention modules before loading
-                try:
-                    from ..core.custom_modules import register_custom_modules
-                    register_custom_modules()
-                except Exception as exc:
-                    logger.warning("Could not register custom modules: %s", exc)
             self._model = YOLO(self.model_path)
             logger.info("YOLO model loaded successfully: %s", self.model_path)
         return self._model
