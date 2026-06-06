@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, File, Header, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 from ...core.config import settings
@@ -15,21 +15,22 @@ router = APIRouter()
 async def upload_frame(
     request:     Request,
     file:        UploadFile = File(...),
-    camera_id:   str        = Header(..., alias="X-Camera-Id"),
-    bus_id:      str        = Header(..., alias="X-Bus-Id"),
-    pane:        str        = Header(..., alias="X-Pane"),
+    device_id:   str        = Form(...),
     captured_at: Optional[int] = Header(None, alias="X-Captured-At"),
 ):
     """
     Receive a JPEG frame from an ESP32-CAM.
 
+    Form fields:
+        device_id     : camera position identifier (e.g. "CAM-front", "CAM-rear").
+                        Combined with the Pi's configured busId to produce the
+                        final cameraId reported to Cloudflare.
+
     Headers:
-        X-Camera-Id   : unique camera identifier (pre-configured on device)
-        X-Bus-Id      : bus this camera is mounted on (pre-configured on device)
-        X-Pane        : position on the bus — e.g. "front" or "rear"
-        X-Captured-At : Unix timestamp (seconds) from NTP — used to group
+        X-Captured-At : Unix timestamp (seconds) from NTP — used to bucket
                         simultaneous frames from the same bus together.
                         Falls back to server receive time if omitted.
+
     Body:
         file (multipart/form-data) : JPEG image
     """
@@ -48,10 +49,13 @@ async def upload_frame(
         else datetime.now(timezone.utc).isoformat()
     )
 
-    grouper: FrameGrouper = request.app.state.grouper
-    result = await grouper.add_frame(bus_id, pane, raw_bytes, timestamp, captured_at)
+    # All cameras on this Pi belong to the same bus (configured via BUS_ID in .env)
+    bus_id = settings.bus_id
 
-    return JSONResponse({"camera_id": camera_id, **result, "timestamp": timestamp})
+    grouper: FrameGrouper = request.app.state.grouper
+    result = await grouper.add_frame(bus_id, device_id, raw_bytes, timestamp, captured_at)
+
+    return JSONResponse({"device_id": device_id, **result, "timestamp": timestamp})
 
 
 @router.get("/health")

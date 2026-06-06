@@ -27,10 +27,18 @@ class Settings(BaseSettings):
     retry_interval_seconds: int = int(os.getenv("RETRY_INTERVAL_SECONDS", "30"))
     max_retry_attempts: int = int(os.getenv("MAX_RETRY_ATTEMPTS", "10"))
 
-    # Model auto-update — polls Cloudflare Worker for new model versions
-    model_dir: str = os.getenv("MODEL_DIR", "models")
-    model_auto_update: bool = os.getenv("MODEL_AUTO_UPDATE", "false").lower() == "true"
-    model_update_interval_seconds: int = int(os.getenv("MODEL_UPDATE_INTERVAL_SECONDS", "300"))
+    # Bus identification — this Pi's bus (matched against /api/v1/buses at startup)
+    bus_id: str = os.getenv("BUS_ID", "")
+    bus_info_refresh_seconds: int = int(os.getenv("BUS_INFO_REFRESH_SECONDS", "300"))
+
+    # Camera-ID template — placeholders: {bus}=busId numeric, {pos}=position suffix (001/002/003)
+    camera_id_template: str = os.getenv("CAMERA_ID_TEMPLATE", "CAM-BUS{bus}-{pos}")
+
+    # UDP broadcast camera-sync
+    camera_sync_enabled: bool = os.getenv("CAMERA_SYNC_ENABLED", "true").lower() == "true"
+    camera_sync_broadcast_addr: str = os.getenv("CAMERA_SYNC_BROADCAST_ADDR", "255.255.255.255")
+    camera_sync_port: int = int(os.getenv("CAMERA_SYNC_PORT", "5005"))
+    camera_sync_interval_seconds: int = int(os.getenv("CAMERA_SYNC_INTERVAL_SECONDS", "2"))
 
     # Server
     host: str = os.getenv("HOST", "0.0.0.0")

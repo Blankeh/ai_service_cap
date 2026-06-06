@@ -14,11 +14,12 @@ from .api.router import api_router
 from .core.config import settings
 from .repos.queue_repo import QueueRepo
 from .services.aggregator_service import AggregatorService
+from .services.bus_info_service import BusInfoService
+from .services.camera_sync_service import CameraSyncService
 from .services.cloudflare_service import CloudflareService
 from .services.grouper_service import FrameGrouper
 from .services.image_service import ImageService
 from .services.inference_service import InferenceService
-from .services.model_update_service import ModelUpdateService
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +34,13 @@ async def lifespan(app: FastAPI):
     )
     queue_repo     = QueueRepo()
     cloudflare_svc = CloudflareService(queue_repo=queue_repo)
+
+    bus_info_svc = BusInfoService()
+    await bus_info_svc.fetch()  # best-effort; logs warning on failure, does not block startup
+
     aggregator_svc = AggregatorService(
         cloudflare_svc=cloudflare_svc,
+        bus_info_svc=bus_info_svc,
         flush_interval=settings.aggregator_flush_interval,
         spike_threshold=settings.aggregator_spike_threshold,
     )
@@ -47,22 +53,19 @@ async def lifespan(app: FastAPI):
         bucket_size=settings.group_bucket_size,
     )
 
+    camera_sync_svc = CameraSyncService()
+
     app.state.image_svc      = image_svc
     app.state.inference_svc  = inference_svc
     app.state.queue_repo     = queue_repo
     app.state.cloudflare_svc = cloudflare_svc
+    app.state.bus_info_svc   = bus_info_svc
     app.state.grouper        = grouper
 
     retry_task      = asyncio.create_task(_retry_loop(cloudflare_svc))
     aggregator_task = asyncio.create_task(aggregator_svc.run_loop())
-
-    model_update_task = None
-    if settings.model_auto_update:
-        model_update_svc  = ModelUpdateService(inference_svc=inference_svc)
-        model_update_task = asyncio.create_task(_model_update_loop(model_update_svc))
-        logger.info("Model auto-update enabled (interval=%ds)", settings.model_update_interval_seconds)
-    else:
-        logger.info("Model auto-update disabled (set MODEL_AUTO_UPDATE=true to enable)")
+    bus_info_task   = asyncio.create_task(bus_info_svc.run_loop())
+    camera_sync_task = asyncio.create_task(camera_sync_svc.run_loop())
 
     logger.info("AI service started")
     yield
@@ -70,8 +73,8 @@ async def lifespan(app: FastAPI):
     # ── Shutdown ──────────────────────────────────────────────────────────────
     retry_task.cancel()
     aggregator_task.cancel()
-    if model_update_task:
-        model_update_task.cancel()
+    bus_info_task.cancel()
+    camera_sync_task.cancel()
     logger.info("AI service stopped")
 
 
@@ -97,22 +100,13 @@ async def _log_requests(request: Request, call_next) -> Response:
     return response
 
 
-async def _retry_loop(cloudflare_svc: CloudflareService):
+async def _retry_loop(cloudflare_svc: CloudflareService) -> None:
     while True:
         await asyncio.sleep(settings.retry_interval_seconds)
         try:
             await cloudflare_svc.flush_queue()
         except Exception as exc:
             logger.error("Retry loop error: %s", exc)
-
-
-async def _model_update_loop(model_update_svc: ModelUpdateService):
-    while True:
-        await asyncio.sleep(settings.model_update_interval_seconds)
-        try:
-            await model_update_svc.check_and_update()
-        except Exception as exc:
-            logger.error("Model update loop error: %s", exc)
 
 
 if __name__ == "__main__":

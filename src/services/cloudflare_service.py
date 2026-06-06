@@ -11,8 +11,9 @@ logger = logging.getLogger(__name__)
 
 
 class CloudflareService:
-    def __init__(self, queue_repo: QueueRepo):
-        self.queue_repo = queue_repo
+    def __init__(self, queue_repo: QueueRepo) -> None:
+        self.queue_repo  = queue_repo
+        self._upload_url = settings.cloudflare_api_url.rstrip("/") + "/occupancy"
         self.headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {settings.cloudflare_api_key}",
@@ -20,63 +21,69 @@ class CloudflareService:
 
     async def send(self, payload: dict) -> bool:
         """
-        Send a crowd snapshot to Cloudflare.
+        Send a camera snapshot to Cloudflare.
 
         Expected payload:
         {
-            "group_id":    "BUS-001_2026-05-14T20:44:00",
-            "bus_id":      "BUS-001",
-            "timestamp":   "...",
-            "panes":       ["front", "rear"],
-            "crowd_count": 7
+            "cameraId":       "CAM-BUS34-001",
+            "busId":          1,
+            "route":          "34A-Taksim",
+            "cameraStatus":   "ACTIVE",
+            "busStatus":      "RUNNING",
+            "timestamp":      "2024-06-03T14:30:00+03:00",
+            "passengerCount": 23,
+            "driverName":     "Mehmet Yilmaz"  // optional
         }
 
         On failure enqueues for retry. Returns True if sent.
         """
-        bus_id   = payload["bus_id"]
-        group_id = payload["group_id"]
+        camera_id       = payload.get("cameraId", "?")
+        bus_id_str      = str(payload.get("busId", "?"))
+        group_id        = f"{camera_id}_{payload.get('timestamp', '')}"
+        passenger_count = payload.get("passengerCount", "?")
+
         try:
             async with httpx.AsyncClient(timeout=settings.cloudflare_timeout) as client:
                 response = await client.post(
-                    settings.cloudflare_api_url,
+                    self._upload_url,
                     headers=self.headers,
                     json=payload,
                 )
                 response.raise_for_status()
-                logger.info(f"Sent: {group_id} crowd={payload['crowd_count']}")
+                logger.info("Sent: %s  passengers=%s", camera_id, passenger_count)
                 return True
 
         except (httpx.RequestError, httpx.HTTPStatusError) as exc:
             logger.warning(
-                "Send failed for %s (crowd=%d): %s — queuing for retry",
-                group_id, payload.get('crowd_count', '?'), exc,
+                "Send failed for %s (passengers=%s): %s — queuing for retry",
+                camera_id, passenger_count, exc,
                 exc_info=True,
             )
-            self.queue_repo.enqueue(bus_id, group_id, payload)
+            self.queue_repo.enqueue(bus_id_str, group_id, payload)
             return False
 
-    async def flush_queue(self):
+    async def flush_queue(self) -> None:
         """Retry queued records with exponential backoff."""
         due = self.queue_repo.get_due()
         if not due:
             return
 
-        logger.info(f"Retrying {len(due)} queued record(s)")
+        logger.info("Retrying %d queued record(s)", len(due))
         for record in due:
             if record.retry_count >= settings.max_retry_attempts:
-                logger.error(f"Dropping {record.group_id} after {record.retry_count} attempts")
+                logger.error("Dropping %s after %d attempts", record.group_id, record.retry_count)
                 self.queue_repo.delete(record.id)
                 continue
 
             try:
                 async with httpx.AsyncClient(timeout=settings.cloudflare_timeout) as client:
                     response = await client.post(
-                        settings.cloudflare_api_url,
+                        self._upload_url,
                         headers=self.headers,
                         json=json.loads(record.payload),
                     )
                     response.raise_for_status()
-                    logger.info(f"Retry success: {record.group_id}")
+                    logger.info("Retry success: %s", record.group_id)
                     self.queue_repo.delete(record.id)
 
             except (httpx.RequestError, httpx.HTTPStatusError) as exc:

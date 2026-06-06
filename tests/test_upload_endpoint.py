@@ -2,22 +2,18 @@ import io
 import pytest
 from unittest.mock import AsyncMock
 
-from .conftest import make_jpeg, build_client, CAMERA_ID, BUS_ID, PANE, BUCKET
+from .conftest import make_jpeg, build_client, DEVICE_ID, BUS_ID, BUCKET
 from src.services.grouper_service import FrameGrouper
 
 
-UPLOAD_HEADERS = {
-    "X-Camera-Id": CAMERA_ID,
-    "X-Bus-Id":    BUS_ID,
-    "X-Pane":      PANE,
-}
-
-
-def _post_frame(client, jpeg_bytes: bytes, content_type="image/jpeg", headers=None):
+def _post_frame(client, jpeg_bytes: bytes, content_type="image/jpeg", device_id=DEVICE_ID,
+                extra_headers=None):
+    headers = extra_headers or {}
     return client.post(
         "/api/v1/upload",
-        headers=UPLOAD_HEADERS if headers is None else headers,
+        headers=headers,
         files={"file": ("frame.jpg", io.BytesIO(jpeg_bytes), content_type)},
+        data={"device_id": device_id},
     )
 
 
@@ -29,52 +25,47 @@ class TestUploadSuccess:
 
     def test_response_fields(self, client, dummy_jpeg):
         body = _post_frame(client, dummy_jpeg).json()
-        for key in ("camera_id", "bus_id", "bucket", "pane", "received", "timestamp"):
+        for key in ("device_id", "bus_id", "bucket", "received", "timestamp"):
             assert key in body, f"Missing field: {key}"
 
-    def test_identity_echoed(self, client, dummy_jpeg):
+    def test_device_id_echoed(self, client, dummy_jpeg):
         body = _post_frame(client, dummy_jpeg).json()
-        assert body["camera_id"] == CAMERA_ID
-        assert body["bus_id"]    == BUS_ID
-        assert body["pane"]      == PANE
+        assert body["device_id"] == DEVICE_ID
 
     def test_timestamp_is_iso8601(self, client, dummy_jpeg):
         from datetime import datetime
         ts = _post_frame(client, dummy_jpeg).json()["timestamp"]
         datetime.fromisoformat(ts)
 
-    def test_grouper_called_with_bus_and_pane(self, client, dummy_jpeg, mock_grouper):
+    def test_grouper_called_with_bus_and_device(self, client, dummy_jpeg, mock_grouper):
         _post_frame(client, dummy_jpeg)
         mock_grouper.add_frame.assert_called_once()
         call = mock_grouper.add_frame.call_args
-        assert call.args[0] == BUS_ID
-        assert call.args[1] == PANE
+        assert call.args[1] == DEVICE_ID   # second positional: device_id
 
     def test_captured_at_header_forwarded(self, mock_queue_repo, mock_grouper, dummy_jpeg):
         c = build_client(queue_repo=mock_queue_repo, grouper=mock_grouper)
-        headers = {**UPLOAD_HEADERS, "X-Captured-At": "1000"}
-        _post_frame(c, dummy_jpeg, headers=headers)
+        _post_frame(c, dummy_jpeg, extra_headers={"X-Captured-At": "1000"})
         call = mock_grouper.add_frame.call_args
         assert call.args[4] == 1000
 
+    def test_different_device_ids_accepted(self, mock_queue_repo, mock_grouper, dummy_jpeg):
+        c = build_client(queue_repo=mock_queue_repo, grouper=mock_grouper)
+        for dev in ("CAM-front", "CAM-rear", "CAM-mid"):
+            r = _post_frame(c, dummy_jpeg, device_id=dev)
+            assert r.status_code == 200
 
-# ── Missing required headers ──────────────────────────────────────────────────
 
-class TestMissingHeaders:
-    def test_missing_camera_id_returns_422(self, client, dummy_jpeg):
-        headers = {k: v for k, v in UPLOAD_HEADERS.items() if k != "X-Camera-Id"}
-        assert _post_frame(client, dummy_jpeg, headers=headers).status_code == 422
+# ── Missing required fields ───────────────────────────────────────────────────
 
-    def test_missing_bus_id_returns_422(self, client, dummy_jpeg):
-        headers = {k: v for k, v in UPLOAD_HEADERS.items() if k != "X-Bus-Id"}
-        assert _post_frame(client, dummy_jpeg, headers=headers).status_code == 422
-
-    def test_missing_pane_returns_422(self, client, dummy_jpeg):
-        headers = {k: v for k, v in UPLOAD_HEADERS.items() if k != "X-Pane"}
-        assert _post_frame(client, dummy_jpeg, headers=headers).status_code == 422
-
-    def test_no_headers_returns_422(self, client, dummy_jpeg):
-        assert _post_frame(client, dummy_jpeg, headers={}).status_code == 422
+class TestMissingFields:
+    def test_missing_device_id_returns_422(self, client, dummy_jpeg):
+        r = client.post(
+            "/api/v1/upload",
+            files={"file": ("frame.jpg", io.BytesIO(dummy_jpeg), "image/jpeg")},
+            # no data= means no device_id form field
+        )
+        assert r.status_code == 422
 
 
 # ── Image validation ──────────────────────────────────────────────────────────

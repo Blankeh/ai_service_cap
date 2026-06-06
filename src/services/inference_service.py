@@ -30,15 +30,6 @@ class InferenceService:
             logger.info("YOLO model loaded successfully: %s", self.model_path)
         return self._model
 
-    def reload(self, new_path: str) -> None:
-        """Hot-swap the model. Validates the new model before replacing."""
-        logger.info("Loading replacement model from %s", new_path)
-        new_model = YOLO(new_path)  # raises if the file is invalid
-        with self._lock:
-            self._model = new_model
-            self.model_path = new_path
-        logger.info("Model reloaded: %s", new_path)
-
     def count_crowd(self, img: np.ndarray) -> dict:
         """
         Run YOLO on the preprocessed image and return crowd count + detections.

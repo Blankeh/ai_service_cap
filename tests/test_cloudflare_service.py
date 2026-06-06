@@ -8,16 +8,19 @@ import pytest
 from src.services.cloudflare_service import CloudflareService
 from src.repos.queue_repo import QueueRepo
 
-BUS_ID   = "BUS-001"
-GROUP_ID = "BUS-001_2024-01-01T00:00:00"
-TS       = "2024-01-01T00:00:00+00:00"
+CAMERA_ID = "CAM-BUS34-001"
+BUS_ID    = 34
+TS        = "2024-01-01T00:00:00+03:00"
 
 PAYLOAD = {
-    "group_id":    GROUP_ID,
-    "bus_id":      BUS_ID,
-    "timestamp":   TS,
-    "panes":       ["front"],
-    "crowd_count": 4,
+    "cameraId":       CAMERA_ID,
+    "busId":          BUS_ID,
+    "route":          "34A-Taksim",
+    "cameraStatus":   "ACTIVE",
+    "busStatus":      "RUNNING",
+    "timestamp":      TS,
+    "passengerCount": 4,
+    "driverName":     "Mehmet Yilmaz",
 }
 
 
@@ -60,27 +63,35 @@ class TestSend:
             await svc.send(PAYLOAD)
         record = repo.get_due()[0]
         saved = json.loads(record.payload)
-        assert saved["bus_id"] == BUS_ID
-        assert saved["group_id"] == GROUP_ID
+        assert saved["cameraId"]       == CAMERA_ID
+        assert saved["passengerCount"] == 4
+        assert saved["driverName"]     == "Mehmet Yilmaz"
+
+    async def test_group_id_stored_uses_camera_id_and_timestamp(self, svc, repo):
+        with patch("httpx.AsyncClient.post", side_effect=httpx.ConnectError("down")):
+            await svc.send(PAYLOAD)
+        record = repo.get_due()[0]
+        assert CAMERA_ID in record.group_id
+        assert TS in record.group_id
 
 
 class TestFlushQueue:
     async def test_flush_sends_queued_records(self, svc, repo):
-        repo.enqueue(BUS_ID, GROUP_ID, PAYLOAD)
+        repo.enqueue(str(BUS_ID), f"{CAMERA_ID}_{TS}", PAYLOAD)
         with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
             mock_post.return_value = MagicMock(status_code=200, raise_for_status=lambda: None)
             await svc.flush_queue()
         assert repo.count() == 0
 
     async def test_flush_increments_retry_on_failure(self, svc, repo):
-        repo.enqueue(BUS_ID, GROUP_ID, PAYLOAD)
+        repo.enqueue(str(BUS_ID), f"{CAMERA_ID}_{TS}", PAYLOAD)
         with patch("httpx.AsyncClient.post", side_effect=httpx.ConnectError("down")):
             await svc.flush_queue()
         assert repo.count() == 1
 
     async def test_flush_drops_after_max_retries(self, svc, repo):
         from src.core.config import settings
-        repo.enqueue(BUS_ID, GROUP_ID, PAYLOAD)
+        repo.enqueue(str(BUS_ID), f"{CAMERA_ID}_{TS}", PAYLOAD)
         record = repo.get_due()[0]
         past = (datetime.utcnow() - timedelta(seconds=1)).isoformat()
         for _ in range(settings.max_retry_attempts):

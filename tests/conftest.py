@@ -13,9 +13,8 @@ from src.services.image_service import ImageService
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
-CAMERA_ID = "ESP32-BUS001-FRONT"
-BUS_ID    = "BUS-001"
-PANE      = "front"
+DEVICE_ID = "CAM-front"
+BUS_ID    = "1"
 BUCKET    = 1000
 
 
@@ -59,10 +58,10 @@ def mock_queue_repo() -> QueueRepo:
 def mock_grouper() -> AsyncMock:
     svc = AsyncMock(spec=FrameGrouper)
     svc.add_frame.return_value = {
-        "bus_id":   BUS_ID,
-        "bucket":   BUCKET,
-        "pane":     PANE,
-        "received": [PANE],
+        "bus_id":    BUS_ID,
+        "bucket":    BUCKET,
+        "device_id": DEVICE_ID,
+        "received":  [DEVICE_ID],
     }
     return svc
 
