@@ -5,6 +5,10 @@ import time
 import numpy as np
 from ultralytics import YOLO
 
+from src.core.custom_modules import register_custom_modules
+
+register_custom_modules()
+
 logger = logging.getLogger(__name__)
 
 
