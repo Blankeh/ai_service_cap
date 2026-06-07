@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 from .core.logging import setup_logging
@@ -91,6 +92,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Bus Crowd AI Service", version="1.0.0", lifespan=lifespan)
+
+# Allow-everything CORS (browsers only — does not affect curl/ESP32/TCP reachability)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,  # must be False when allow_origins=["*"]
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(api_router, prefix="/api")
 
 # DEV-only viewer routes — mounted only when APP_ENV=dev so prod never exposes them.
