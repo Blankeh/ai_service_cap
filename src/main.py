@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # ── Startup ───────────────────────────────────────────────────────────────
+    # Startup 
     image_svc     = ImageService(target_size=settings.yolo_input_size)
     inference_svc = InferenceService(
         model_path=settings.model_path,
@@ -72,7 +72,7 @@ async def lifespan(app: FastAPI):
     logger.info("AI service started")
     yield
 
-    # ── Shutdown ──────────────────────────────────────────────────────────────
+    # Shutdown 
     aggregator_task.cancel()
     camera_sync_task.cancel()
     logger.info("AI service stopped")
