@@ -49,12 +49,14 @@ class FrameGrouper:
         aggregator_svc,
         group_window_ms: int = 500,
         bucket_size:     int = 2,
+        dev_viewer=None,
     ) -> None:
         self.image_svc       = image_svc
         self.inference_svc   = inference_svc
         self.aggregator_svc  = aggregator_svc
         self.group_window_ms = group_window_ms
         self.bucket_size     = bucket_size
+        self.dev_viewer      = dev_viewer  # DevViewer in dev, None in prod
         self._groups: dict[tuple[str, int], _BusGroup] = {}
 
     def _bucket(self, captured_at: int) -> int:
@@ -121,6 +123,11 @@ class FrameGrouper:
                 result        = self.inference_svc.count_crowd(enhanced)
                 count         = result["crowd_count"]
                 camera_status = "ACTIVE"
+                if self.dev_viewer is not None:
+                    # bbox coords are in `enhanced`'s 640×640 letterboxed space
+                    await self.dev_viewer.update(
+                        device_id, enhanced, result["detections"], count
+                    )
             except Exception as exc:
                 logger.warning(
                     "[Grouper] Inference failed for device=%s bus=%s: %s",

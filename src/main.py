@@ -45,12 +45,24 @@ async def lifespan(app: FastAPI):
         spike_threshold=settings.aggregator_spike_threshold,
     )
 
+    # DEV-only live detection viewer — never imported/started in prod.
+    dev_viewer = None
+    if settings.app_env == "dev":
+        from .services.dev_viewer import DevViewer
+        dev_viewer = DevViewer()
+        logger.info(
+            "DEV mode — live detection viewer at http://%s:%d/dev",
+            settings.host, settings.port,
+        )
+    app.state.dev_viewer = dev_viewer
+
     grouper = FrameGrouper(
         image_svc=image_svc,
         inference_svc=inference_svc,
         aggregator_svc=aggregator_svc,
         group_window_ms=settings.group_window_ms,
         bucket_size=settings.group_bucket_size,
+        dev_viewer=dev_viewer,
     )
 
     camera_sync_svc = CameraSyncService()
@@ -80,6 +92,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Bus Crowd AI Service", version="1.0.0", lifespan=lifespan)
 app.include_router(api_router, prefix="/api")
+
+# DEV-only viewer routes — mounted only when APP_ENV=dev so prod never exposes them.
+if settings.app_env == "dev":
+    from .api.dev_routes import dev_router
+    app.include_router(dev_router, prefix="/dev")
 
 
 @app.middleware("http")

@@ -32,6 +32,9 @@ static bool wifiConnect() {
         Serial.println(" FAILED");
         return false;
     }
+    // Disable modem-sleep: default STA power-save adds latency and drops packets
+    // mid-transfer, which shows up as intermittent HTTP POST failures (-1 / -11).
+    WiFi.setSleep(false);
     Serial.printf(" OK  IP=%s\n", WiFi.localIP().toString().c_str());
     return true;
 }

@@ -1,6 +1,8 @@
 #include "uploader.h"
 #include "config.h"
 #include <Arduino.h>
+#include <WiFi.h>
+#include <WiFiClient.h>
 #include <HTTPClient.h>
 
 static const char* BOUNDARY = "----ESP32CAMBound";
@@ -49,21 +51,49 @@ bool uploaderPost(camera_fb_t* fb, uint32_t capturedAt) {
     const String url =
         "http://" + String(SERVER_HOST) + ":" + SERVER_PORT + UPLOAD_PATH;
 
+    // Context printed with every result so a failure is diagnosable on its own:
+    // weak RSSI → transport errors; low heap → POST allocation failures.
+    const bool wifiUp = (WiFi.status() == WL_CONNECTED);
+    Serial.printf("[Upload] POST %s  body=%zuB jpeg=%zuB heap=%uB rssi=%ddBm wifi=%s\n",
+                  url.c_str(), totalLen, fb->len,
+                  ESP.getFreeHeap(), WiFi.RSSI(), wifiUp ? "up" : "DOWN");
+
+    WiFiClient client;
     HTTPClient http;
-    http.begin(url);
+    http.begin(client, url);
+    http.setConnectTimeout(5000);   // TCP connect (ms)
+    http.setTimeout(15000);         // wait for server response (ms) — VGA frames are large
     http.addHeader("Content-Type",
                    "multipart/form-data; boundary=" + String(BOUNDARY));
     http.addHeader("X-Captured-At", String(capturedAt));
 
+    const uint32_t t0 = millis();
     int code = http.POST(body, totalLen);
+    const uint32_t elapsed = millis() - t0;
     free(body);
-    http.end();
+
+    // Negative codes are transport-level failures (no HTTP response received),
+    // e.g. -1 connection refused, -11 read timeout. errorToString() names them.
+    if (code <= 0) {
+        Serial.printf("[Upload] FAILED  transport error %d (%s)  after %ums  rssi=%ddBm wifi=%s\n",
+                      code, http.errorToString(code).c_str(),
+                      elapsed, WiFi.RSSI(),
+                      WiFi.status() == WL_CONNECTED ? "up" : "DOWN");
+        http.end();
+        return false;
+    }
 
     if (code >= 200 && code < 300) {
-        Serial.printf("[Upload] OK  HTTP %d  (%zu B jpeg)\n", code, fb->len);
+        Serial.printf("[Upload] OK  HTTP %d  (%zuB jpeg, %ums)\n", code, fb->len, elapsed);
+        http.end();
         return true;
     }
 
-    Serial.printf("[Upload] FAILED  HTTP %d  url=%s\n", code, url.c_str());
+    // Server responded but rejected the request — surface its body (FastAPI sends
+    // a JSON "detail" message, e.g. 415 wrong content-type, 422 invalid JPEG).
+    String resp = http.getString();
+    Serial.printf("[Upload] FAILED  HTTP %d  after %ums  body=%s\n",
+                  code, elapsed, resp.c_str());
+    http.end();
     return false;
 }

@@ -3,6 +3,10 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    # Environment — "dev" enables the live detection viewer at /dev;
+    # "prod" never imports or starts the viewer.
+    app_env: str = os.getenv("APP_ENV", "prod").strip().lower()
+
     # Model
     model_path: str = os.getenv("MODEL_PATH", "yolov8n.pt")
     yolo_input_size: int = int(os.getenv("YOLO_INPUT_SIZE", "640"))
