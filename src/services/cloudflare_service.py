@@ -1,9 +1,10 @@
-import json
 import logging
 from datetime import datetime, timedelta
 
 import httpx
+from pydantic import ValidationError
 
+from ..configs.schemas import OccupancyPayload
 from ..core.config import settings
 from ..repos.queue_repo import QueueRepo
 
@@ -20,44 +21,38 @@ class CloudflareService:
         }
 
     async def send(self, payload: dict) -> bool:
-        """
-        Send a camera snapshot to Cloudflare.
+        try:
+            validated = OccupancyPayload(**payload)
+        except ValidationError as exc:
+            logger.error("[Cloudflare] Invalid payload schema: %s", exc)
+            return False
 
-        Expected payload:
-        {
-            "cameraId":       "CAM-BUS34-001",
-            "busId":          1,
-            "route":          "34A-Taksim",
-            "cameraStatus":   "ACTIVE",
-            "busStatus":      "RUNNING",
-            "timestamp":      "2024-06-03T14:30:00+03:00",
-            "passengerCount": 23,
-            "driverName":     "Mehmet Yilmaz"  // optional
-        }
+        camera_id       = validated.cameraId
+        bus_id_str      = str(validated.busId)
+        group_id        = f"{camera_id}_{validated.timestamp}"
+        passenger_count = validated.passengerCount
 
-        On failure enqueues for retry. Returns True if sent.
-        """
-        camera_id       = payload.get("cameraId", "?")
-        bus_id_str      = str(payload.get("busId", "?"))
-        group_id        = f"{camera_id}_{payload.get('timestamp', '')}"
-        passenger_count = payload.get("passengerCount", "?")
+        logger.info("[Cloudflare] Payload → %s", validated.model_dump_json())
+
+        if not settings.cloudflare_api_url or not settings.cloudflare_api_key or settings.cloudflare_api_key == "your_api_key_here":
+            logger.info("[Cloudflare] No API configured — dummy mode, payload logged above")
+            return True
 
         try:
             async with httpx.AsyncClient(timeout=settings.cloudflare_timeout) as client:
                 response = await client.post(
                     self._upload_url,
                     headers=self.headers,
-                    json=payload,
+                    json=validated.model_dump(),
                 )
                 response.raise_for_status()
-                logger.info("Sent: %s  passengers=%s", camera_id, passenger_count)
+                logger.info("[Cloudflare] Sent OK: %s  passengers=%s", camera_id, passenger_count)
                 return True
 
         except (httpx.RequestError, httpx.HTTPStatusError) as exc:
             logger.warning(
-                "Send failed for %s (passengers=%s): %s — queuing for retry",
+                "[Cloudflare] Send failed for %s (passengers=%s): %s — queuing for retry",
                 camera_id, passenger_count, exc,
-                exc_info=True,
             )
             self.queue_repo.enqueue(bus_id_str, group_id, payload)
             return False
@@ -80,7 +75,7 @@ class CloudflareService:
                     response = await client.post(
                         self._upload_url,
                         headers=self.headers,
-                        json=json.loads(record.payload),
+                        content=record.payload.encode(),
                     )
                     response.raise_for_status()
                     logger.info("Retry success: %s", record.group_id)

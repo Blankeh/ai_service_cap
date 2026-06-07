@@ -26,7 +26,7 @@ void udpListenerLoop() {
     if (n <= 0) return;
     buf[n] = '\0';
 
-    JsonDocument doc;
+    StaticJsonDocument<128> doc;
     DeserializationError err = deserializeJson(doc, buf);
     if (err) {
         Serial.printf("[UDP] Bad JSON: %s\n", err.c_str());

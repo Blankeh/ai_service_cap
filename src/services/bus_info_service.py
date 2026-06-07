@@ -12,7 +12,9 @@ from dataclasses import dataclass
 from typing import Optional
 
 import httpx
+from pydantic import ValidationError
 
+from ..configs.schemas import BusEntry
 from ..core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -62,22 +64,26 @@ class BusInfoService:
             logger.warning("[BusInfo] Fetch failed (%s) — keeping cached data", exc)
             return False
 
-        own_id = str(settings.bus_id).strip()
-        for bus in buses:
-            entry_id = str(bus.get("busId", bus.get("id", ""))).strip()
-            if entry_id == own_id:
-                self._cache = BusInfo(
-                    bus_id=int(entry_id),
-                    route=bus.get("route", ""),
-                    bus_status=bus.get("busStatus", bus.get("status", "RUNNING")),
-                    driver_name=bus.get("driverName") or None,
-                )
-                logger.info(
-                    "[BusInfo] Cached: busId=%d  route=%s  busStatus=%s  driverName=%s",
-                    self._cache.bus_id, self._cache.route,
-                    self._cache.bus_status, self._cache.driver_name,
-                )
-                return True
+        for raw in buses:
+            if str(raw.get("busId", raw.get("id", ""))).strip() != str(settings.bus_id):
+                continue
+            try:
+                entry = BusEntry(**raw)
+            except ValidationError as exc:
+                logger.warning("[BusInfo] Schema mismatch for bus entry: %s", exc)
+                return False
+            self._cache = BusInfo(
+                bus_id=entry.busId,
+                route=entry.route or "",
+                bus_status=entry.busStatus,
+                driver_name=entry.driverName,
+            )
+            logger.info(
+                "[BusInfo] Cached: busId=%d  route=%s  busStatus=%s  driverName=%s",
+                self._cache.bus_id, self._cache.route,
+                self._cache.bus_status, self._cache.driver_name,
+            )
+            return True
 
         logger.warning(
             "[BusInfo] Bus id=%s not found in response (%d entries)",

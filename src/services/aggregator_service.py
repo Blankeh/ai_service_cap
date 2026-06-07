@@ -111,7 +111,7 @@ class AggregatorService:
         count    = buf.latest_count()
         bus_info = self._bus_info_svc.current()
 
-        bus_id_num      = bus_info.bus_id     if bus_info else None
+        bus_id_num      = bus_info.bus_id     if bus_info else (settings.bus_id or None)
         route           = bus_info.route      if bus_info else None
         bus_status      = bus_info.bus_status if bus_info else "RUNNING"
 

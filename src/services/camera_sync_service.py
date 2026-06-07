@@ -39,7 +39,7 @@ class CameraSyncService:
         packet = json.dumps({"cmd": "capture", "ts": int(time.time())}).encode()
         try:
             self._sock.sendto(packet, self._addr)
-            logger.debug("[CameraSync] Trigger sent → %s:%d", *self._addr)
+            logger.info("[CameraSync] Trigger sent → %s:%d", *self._addr)
         except OSError as exc:
             logger.warning(
                 "[CameraSync] sendto failed: %s — socket will be re-opened next interval", exc

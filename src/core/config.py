@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     max_retry_attempts: int = int(os.getenv("MAX_RETRY_ATTEMPTS", "10"))
 
     # Bus identification — this Pi's bus (matched against /api/v1/buses at startup)
-    bus_id: str = os.getenv("BUS_ID", "")
+    bus_id: int = int(os.getenv("BUS_ID", "0"))
     bus_info_refresh_seconds: int = int(os.getenv("BUS_INFO_REFRESH_SECONDS", "300"))
 
     # Camera-ID template — placeholders: {bus}=busId numeric, {pos}=position suffix (001/002/003)

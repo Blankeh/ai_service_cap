@@ -2,8 +2,8 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse
 
+from ...configs.schemas import UploadResponse
 from ...core.config import settings
 from ...repos.queue_repo import QueueRepo
 from ...services.grouper_service import FrameGrouper
@@ -11,7 +11,7 @@ from ...services.grouper_service import FrameGrouper
 router = APIRouter()
 
 
-@router.post("/upload")
+@router.post("/upload", response_model=UploadResponse)
 async def upload_frame(
     request:     Request,
     file:        UploadFile = File(...),
@@ -55,7 +55,13 @@ async def upload_frame(
     grouper: FrameGrouper = request.app.state.grouper
     result = await grouper.add_frame(bus_id, device_id, raw_bytes, timestamp, captured_at)
 
-    return JSONResponse({"device_id": device_id, **result, "timestamp": timestamp})
+    return UploadResponse(
+        device_id=device_id,
+        bus_id=str(bus_id),
+        bucket=result["bucket"],
+        received=result["received"],
+        timestamp=timestamp,
+    )
 
 
 @router.get("/health")

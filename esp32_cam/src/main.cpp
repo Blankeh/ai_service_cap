@@ -45,6 +45,7 @@ static void captureAndUpload() {
     camera_fb_t* fb = captureFrame();
     if (!fb) return;
 
+    delay(200);
     uploaderPost(fb, capturedAt);
     esp_camera_fb_return(fb);
 }
