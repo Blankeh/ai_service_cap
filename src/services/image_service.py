@@ -23,11 +23,24 @@ class ImageService:
           3. Bilateral filter (noise reduction, keeps person-detection edges)
           4. Resize to YOLO input size with letterboxing
         """
+        canvas, _ = self.enhance_with_meta(raw_bytes)
+        return canvas
+
+    def enhance_with_meta(self, raw_bytes: bytes) -> tuple[np.ndarray, dict]:
+        """
+        Same pipeline as enhance(), but also returns the letterbox transform so
+        callers can map detections (in target_size×target_size space) back to
+        original-frame-normalized coordinates.
+
+        meta = {scale, pad_left, pad_top, new_w, new_h} where the content region
+        is canvas[pad_top:pad_top+new_h, pad_left:pad_left+new_w]. For a detection
+        center (cx, cy): nx = (cx - pad_left)/new_w, ny = (cy - pad_top)/new_h.
+        """
         img = self._decode(raw_bytes)
         img = self._apply_clahe(img)
         img = self._denoise(img)
-        img = self._letterbox(img)
-        return img
+        canvas, meta = self._letterbox(img)
+        return canvas, meta
 
     def encode_jpeg(self, img: np.ndarray, quality: int = 85) -> bytes:
         _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])
@@ -64,8 +77,8 @@ class ImageService:
         # d=5 is ~4× faster than d=9 on ARM Cortex-A72 with similar quality
         return cv2.bilateralFilter(img, d=5, sigmaColor=75, sigmaSpace=75)
 
-    def _letterbox(self, img: np.ndarray) -> np.ndarray:
-        """Resize with padding to maintain aspect ratio."""
+    def _letterbox(self, img: np.ndarray) -> tuple[np.ndarray, dict]:
+        """Resize with padding to maintain aspect ratio. Returns (canvas, meta)."""
         h, w = img.shape[:2]
         scale = self.target_size / max(h, w)
         new_w, new_h = int(w * scale), int(h * scale)
@@ -75,4 +88,12 @@ class ImageService:
         pad_top = (self.target_size - new_h) // 2
         pad_left = (self.target_size - new_w) // 2
         canvas[pad_top : pad_top + new_h, pad_left : pad_left + new_w] = resized
-        return canvas
+
+        meta = {
+            "scale":    scale,
+            "pad_left": pad_left,
+            "pad_top":  pad_top,
+            "new_w":    new_w,
+            "new_h":    new_h,
+        }
+        return canvas, meta

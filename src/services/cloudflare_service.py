@@ -1,19 +1,16 @@
 import logging
-from datetime import datetime, timedelta
 
 import httpx
 from pydantic import ValidationError
 
 from ..configs.schemas import OccupancyPayload
 from ..core.config import settings
-from ..repos.queue_repo import QueueRepo
 
 logger = logging.getLogger(__name__)
 
 
 class CloudflareService:
-    def __init__(self, queue_repo: QueueRepo) -> None:
-        self.queue_repo  = queue_repo
+    def __init__(self) -> None:
         self._upload_url = settings.cloudflare_api_url.rstrip("/") + "/occupancy"
         self.headers = {
             "Content-Type": "application/json",
@@ -28,8 +25,6 @@ class CloudflareService:
             return False
 
         camera_id       = validated.cameraId
-        bus_id_str      = str(validated.busId)
-        group_id        = f"{camera_id}_{validated.timestamp}"
         passenger_count = validated.passengerCount
 
         logger.info("[Cloudflare] Payload → %s", validated.model_dump_json())
@@ -50,43 +45,11 @@ class CloudflareService:
                 return True
 
         except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+            # Don't retry this stale snapshot — the next scheduled flush sends the
+            # latest count, which supersedes whatever failed here.
             logger.warning(
-                "[Cloudflare] Send failed for %s (passengers=%s): %s — queuing for retry",
+                "[Cloudflare] Send failed for %s (passengers=%s): %s — dropping; "
+                "latest count will be sent on next flush",
                 camera_id, passenger_count, exc,
             )
-            self.queue_repo.enqueue(bus_id_str, group_id, payload)
             return False
-
-    async def flush_queue(self) -> None:
-        """Retry queued records with exponential backoff."""
-        due = self.queue_repo.get_due()
-        if not due:
-            return
-
-        logger.info("Retrying %d queued record(s)", len(due))
-        for record in due:
-            if record.retry_count >= settings.max_retry_attempts:
-                logger.error("Dropping %s after %d attempts", record.group_id, record.retry_count)
-                self.queue_repo.delete(record.id)
-                continue
-
-            try:
-                async with httpx.AsyncClient(timeout=settings.cloudflare_timeout) as client:
-                    response = await client.post(
-                        self._upload_url,
-                        headers=self.headers,
-                        content=record.payload.encode(),
-                    )
-                    response.raise_for_status()
-                    logger.info("Retry success: %s", record.group_id)
-                    self.queue_repo.delete(record.id)
-
-            except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-                delay      = min(30 * (2 ** record.retry_count), 3600)
-                next_retry = (datetime.utcnow() + timedelta(seconds=delay)).isoformat()
-                self.queue_repo.increment_retry(record.id, next_retry)
-                logger.warning(
-                    "Retry %d failed for %s, next in %ds: %s",
-                    record.retry_count + 1, record.group_id, delay, exc,
-                    exc_info=True,
-                )

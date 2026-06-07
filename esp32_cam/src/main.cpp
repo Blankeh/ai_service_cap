@@ -53,7 +53,7 @@ static void captureAndUpload() {
     esp_camera_fb_return(fb);
 }
 
-// ── Arduino entry points ──────────────────────────────────────────────────────
+// Arduino entry points 
 void setup() {
     Serial.begin(115200);
     Serial.printf("\n[Main] ESP32-CAM boot  device=%s\n", DEVICE_ID);
@@ -64,7 +64,6 @@ void setup() {
         ESP.restart();
     }
 
-    // NTP is best-effort: if it fails the trigger's embedded timestamp is used
     ntpInit();
 
     if (!cameraInit()) {

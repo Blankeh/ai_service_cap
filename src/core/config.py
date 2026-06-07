@@ -1,5 +1,27 @@
+import json
+import logging
 import os
-from pydantic_settings import BaseSettings
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+
+def _parse_camera_rois() -> dict:
+    """
+    Parse CAMERA_ROIS — a JSON map of pane → normalized [x1,y1,x2,y2] ROI box.
+
+    Example: {"front": [0.0, 0.0, 1.0, 0.5], "rear": [0.0, 0.5, 1.0, 1.0]}
+    Panes with no entry fall back to the full frame (count everything).
+    """
+    raw = os.getenv("CAMERA_ROIS", "").strip()
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        logger.warning("Invalid CAMERA_ROIS JSON (%s) — ignoring, using full-frame ROIs", exc)
+        return {}
 
 
 class Settings(BaseSettings):
@@ -28,15 +50,15 @@ class Settings(BaseSettings):
     # Frame grouper
     group_window_ms: int = int(os.getenv("GROUP_WINDOW_MS", "1000"))  # deadline after first frame arrives
     group_bucket_size: int = int(os.getenv("GROUP_BUCKET_SIZE", "2"))  # must match ESP32 capture interval (seconds)
-    retry_interval_seconds: int = int(os.getenv("RETRY_INTERVAL_SECONDS", "30"))
-    max_retry_attempts: int = int(os.getenv("MAX_RETRY_ATTEMPTS", "10"))
 
-    # Bus identification — this Pi's bus (matched against /api/v1/buses at startup)
+    # Bus identification — this Pi's bus
     bus_id: int = int(os.getenv("BUS_ID", "0"))
-    bus_info_refresh_seconds: int = int(os.getenv("BUS_INFO_REFRESH_SECONDS", "300"))
 
     # Camera-ID template — placeholders: {bus}=busId numeric, {pos}=position suffix (001/002/003)
     camera_id_template: str = os.getenv("CAMERA_ID_TEMPLATE", "CAM-BUS{bus}-{pos}")
+
+    # Per-pane ROI boxes (normalized 0..1), selected by camera device_id/pane.
+    camera_rois: dict = _parse_camera_rois()
 
     # UDP broadcast camera-sync
     camera_sync_enabled: bool = os.getenv("CAMERA_SYNC_ENABLED", "true").lower() == "true"
@@ -52,9 +74,7 @@ class Settings(BaseSettings):
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
     log_dir: str   = os.getenv("LOG_DIR", "logs")
 
-    class Config:
-        env_file = ".env"
-        extra = "ignore"
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
 settings = Settings()
