@@ -5,7 +5,6 @@ from fastapi import APIRouter, File, Form, Header, HTTPException, Request, Uploa
 
 from ...configs.schemas import UploadResponse
 from ...core.config import settings
-from ...repos.queue_repo import QueueRepo
 from ...services.grouper_service import FrameGrouper
 
 router = APIRouter()
@@ -66,19 +65,7 @@ async def upload_frame(
 
 @router.get("/health")
 async def health(request: Request):
-    queue_repo: QueueRepo = request.app.state.queue_repo
     return {
-        "status":         "ok",
-        "queued_records": queue_repo.count(),
-        "model":          settings.model_path,
-    }
-
-
-@router.get("/queue/status")
-async def queue_status(request: Request):
-    queue_repo: QueueRepo = request.app.state.queue_repo
-    return {
-        "pending_records":        queue_repo.count(),
-        "max_retries":            settings.max_retry_attempts,
-        "retry_interval_seconds": settings.retry_interval_seconds,
+        "status": "ok",
+        "model":  settings.model_path,
     }

@@ -24,7 +24,7 @@ class CameraSyncService:
         self._addr = (settings.camera_sync_broadcast_addr, settings.camera_sync_port)
         self._sock: Optional[socket.socket] = None
 
-    # ── Internal ──────────────────────────────────────────────────────────────
+    # Internal 
 
     def _open_socket(self) -> socket.socket:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

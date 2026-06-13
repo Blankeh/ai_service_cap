@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlmodel import select
@@ -10,7 +10,7 @@ from .models import Camera
 class CameraRepo:
     def register_or_touch(self, camera_id: str) -> Camera:
         """Insert if new, otherwise update last_seen. Returns the Camera row."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with get_session() as session:
             camera = session.get(Camera, camera_id)
             if camera:
@@ -30,7 +30,7 @@ class CameraRepo:
         with get_session() as session:
             camera = session.get(Camera, camera_id)
             if camera:
-                camera.last_seen = datetime.utcnow().isoformat()
+                camera.last_seen = datetime.now(timezone.utc).isoformat()
                 session.commit()
 
     def assign(self, camera_id: str, bus_id: str, pane: str) -> bool:

@@ -1,0 +1,27 @@
+[Unit]
+Description=Bus Crowd AI Service (FastAPI + YOLO inference)
+# Wait for the network to be fully up — the service talks to Cloudflare and
+# sends UDP broadcast camera-sync triggers on the LAN.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+Group=__USER__
+WorkingDirectory=__APP_DIR__
+# .env, the SQLite DB (data/app.db) and logs/ are all resolved relative to
+# WorkingDirectory, so this MUST be the project root.
+ExecStart=__PYTHON__ -m src.main
+# Restart on crash and keep retrying forever (e.g. if a dependency or the SD
+# card is briefly unavailable at boot).
+Restart=always
+RestartSec=5
+# Send stdout/stderr to the journal (view with: journalctl -u ai-service -f).
+StandardOutput=journal
+StandardError=journal
+# Give YOLO/torch time to load the model and warm up before timing out startup.
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

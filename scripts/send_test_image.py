@@ -60,7 +60,6 @@ def run(base_url: str, image_path: str | None, panes: list[str]):
     health = r.json()
     print(f"   status  : {health['status']}")
     print(f"   model   : {health['model']}")
-    print(f"   queued  : {health['queued_records']}")
 
     # ── Load image ────────────────────────────────────────────────────────────
     if image_path:

@@ -43,14 +43,14 @@ class TestUploadSuccess:
         call = mock_grouper.add_frame.call_args
         assert call.args[1] == DEVICE_ID   # second positional: device_id
 
-    def test_captured_at_header_forwarded(self, mock_queue_repo, mock_grouper, dummy_jpeg):
-        c = build_client(queue_repo=mock_queue_repo, grouper=mock_grouper)
+    def test_captured_at_header_forwarded(self, mock_grouper, dummy_jpeg):
+        c = build_client(grouper=mock_grouper)
         _post_frame(c, dummy_jpeg, extra_headers={"X-Captured-At": "1000"})
         call = mock_grouper.add_frame.call_args
         assert call.args[4] == 1000
 
-    def test_different_device_ids_accepted(self, mock_queue_repo, mock_grouper, dummy_jpeg):
-        c = build_client(queue_repo=mock_queue_repo, grouper=mock_grouper)
+    def test_different_device_ids_accepted(self, mock_grouper, dummy_jpeg):
+        c = build_client(grouper=mock_grouper)
         for dev in ("CAM-front", "CAM-rear", "CAM-mid"):
             r = _post_frame(c, dummy_jpeg, device_id=dev)
             assert r.status_code == 200
@@ -81,18 +81,13 @@ class TestImageValidation:
         assert _post_frame(client, b"").status_code == 422
 
 
-# ── Health & queue ────────────────────────────────────────────────────────────
+# ── Health ──────────────────────────────────────────────────────────────────
 
 class TestInfoEndpoints:
     def test_health_ok(self, client):
         r = client.get("/api/v1/health")
         assert r.status_code == 200
         assert r.json()["status"] == "ok"
-
-    def test_queue_status(self, client):
-        r = client.get("/api/v1/queue/status")
-        assert r.status_code == 200
-        assert "pending_records" in r.json()
 
 
 # ── Various resolutions ───────────────────────────────────────────────────────
@@ -101,6 +96,6 @@ class TestResolutions:
     @pytest.mark.parametrize("w,h", [
         (160, 120), (320, 240), (640, 480), (800, 600), (1024, 768),
     ])
-    def test_resolution(self, w, h, mock_queue_repo, mock_grouper):
-        c = build_client(queue_repo=mock_queue_repo, grouper=mock_grouper)
+    def test_resolution(self, w, h, mock_grouper):
+        c = build_client(grouper=mock_grouper)
         assert _post_frame(c, make_jpeg(width=w, height=h)).status_code == 200

@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
+from .roi_service import count_in_roi, resolve_roi
+
 logger = logging.getLogger(__name__)
 
 
@@ -117,12 +119,19 @@ class FrameGrouper:
             bus_id, group.bucket, sorted(group.frames),
         )
 
+        # Synced cameras each cover a distinct ROI zone of the bus; sum their
+        # ROI-filtered counts into one combined value for the bus.
+        bus_total      = 0
+        latest_ts      = ""
+        any_active     = False
+
         for device_id, frame in group.frames.items():
             try:
-                enhanced      = self.image_svc.enhance(frame.raw_bytes)
-                result        = self.inference_svc.count_crowd(enhanced)
-                count         = result["crowd_count"]
-                camera_status = "ACTIVE"
+                enhanced, meta = self.image_svc.enhance_with_meta(frame.raw_bytes)
+                result         = self.inference_svc.count_crowd(enhanced)
+                roi            = resolve_roi(device_id)
+                count          = count_in_roi(result["detections"], roi, meta)
+                any_active     = True
                 if self.dev_viewer is not None:
                     # bbox coords are in `enhanced`'s 640×640 letterboxed space
                     await self.dev_viewer.update(
@@ -133,11 +142,17 @@ class FrameGrouper:
                     "[Grouper] Inference failed for device=%s bus=%s: %s",
                     device_id, bus_id, exc,
                 )
-                count         = 0
-                camera_status = "ERROR"
+                count = 0
 
             logger.info(
-                "[Grouper] bus=%s device=%s count=%d status=%s",
-                bus_id, device_id, count, camera_status,
+                "[Grouper] bus=%s device=%s roi_count=%d", bus_id, device_id, count,
             )
-            await self.aggregator_svc.push(device_id, count, frame.timestamp, camera_status)
+            bus_total += count
+            latest_ts  = frame.timestamp
+
+        bus_status = "ACTIVE" if any_active else "ERROR"
+        logger.info(
+            "[Grouper] bus=%s bucket=%d combined_count=%d status=%s",
+            bus_id, group.bucket, bus_total, bus_status,
+        )
+        await self.aggregator_svc.push(bus_id, bus_total, latest_ts, bus_status)

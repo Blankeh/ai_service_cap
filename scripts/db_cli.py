@@ -6,8 +6,6 @@ Usage (run from ai_service/):
     python -m scripts.db_cli cameras list
     python -m scripts.db_cli cameras add  <camera_id> --bus <bus_id> --pane <pane>
     python -m scripts.db_cli cameras assign <camera_id> --bus <bus_id> --pane <pane>
-    python -m scripts.db_cli queue list
-    python -m scripts.db_cli queue clear
 """
 
 import argparse
@@ -20,24 +18,23 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from src.core.config import settings
 from src.repos.database import init_engine
 from src.repos.camera_repo import CameraRepo
-from src.repos.queue_repo import QueueRepo
 
 
-def get_repos():
+def get_repo():
     init_engine(settings.database_url)
-    return CameraRepo(), QueueRepo()
+    return CameraRepo()
 
 
 # ── Commands ──────────────────────────────────────────────────────────────────
 
 def cmd_init(args):
-    get_repos()
+    get_repo()
     print(f"[OK] database : {settings.database_url}")
     print("Database initialised.")
 
 
 def cmd_cameras_list(args):
-    camera_repo, _ = get_repos()
+    camera_repo = get_repo()
     rows = camera_repo.list_all()
     if not rows:
         print("No cameras registered yet.")
@@ -58,7 +55,7 @@ def cmd_cameras_list(args):
 
 
 def cmd_cameras_add(args):
-    camera_repo, _ = get_repos()
+    camera_repo = get_repo()
     existing = camera_repo.get_by_camera_id(args.camera_id)
     if existing:
         print(f"Camera {args.camera_id!r} already registered — use 'assign' to update.")
@@ -74,41 +71,12 @@ def cmd_cameras_add(args):
 
 
 def cmd_cameras_assign(args):
-    camera_repo, _ = get_repos()
+    camera_repo = get_repo()
     if not camera_repo.get_by_camera_id(args.camera_id):
         print(f"Camera {args.camera_id!r} not found. Register it first with 'cameras add'.")
         sys.exit(1)
     camera_repo.assign(args.camera_id, args.bus, args.pane)
     print(f"[OK] {args.camera_id} → bus={args.bus} pane={args.pane}")
-
-
-def cmd_queue_list(args):
-    _, queue_repo = get_repos()
-    rows = queue_repo.get_due()
-    total = queue_repo.count()
-    print(f"Pending records: {total}")
-    if not rows:
-        return
-
-    fmt = "{:<5} {:<10} {:<5} {:<28} {}"
-    print(fmt.format("ID", "BUS ID", "RETRY", "NEXT RETRY", "GROUP ID"))
-    print("-" * 80)
-    for r in rows:
-        print(fmt.format(
-            r.id,
-            r.bus_id,
-            r.retry_count,
-            r.next_retry_at[:19],
-            r.group_id,
-        ))
-
-
-def cmd_queue_clear(args):
-    _, queue_repo = get_repos()
-    rows = queue_repo.get_due()
-    for r in rows:
-        queue_repo.delete(r.id)
-    print(f"[OK] Cleared {len(rows)} record(s) from queue.")
 
 
 # ── Argument parser ───────────────────────────────────────────────────────────
@@ -136,12 +104,6 @@ def main():
     asgn_parser.add_argument("--bus",  required=True)
     asgn_parser.add_argument("--pane", required=True)
 
-    # queue
-    q_parser = sub.add_parser("queue", help="Failsafe queue management")
-    q_sub = q_parser.add_subparsers(dest="queue_command")
-    q_sub.add_parser("list",  help="List pending records")
-    q_sub.add_parser("clear", help="Delete all pending records")
-
     args = parser.parse_args()
 
     dispatch = {
@@ -149,11 +111,9 @@ def main():
         ("cameras", "list"):      cmd_cameras_list,
         ("cameras", "add"):       cmd_cameras_add,
         ("cameras", "assign"):    cmd_cameras_assign,
-        ("queue",   "list"):      cmd_queue_list,
-        ("queue",   "clear"):     cmd_queue_clear,
     }
 
-    sub_cmd = getattr(args, "cameras_command", None) or getattr(args, "queue_command", None)
+    sub_cmd = getattr(args, "cameras_command", None)
     fn = dispatch.get((args.command, sub_cmd))
 
     if fn is None:

@@ -13,9 +13,7 @@ setup_logging()
 
 from .api.router import api_router
 from .core.config import settings
-from .repos.queue_repo import QueueRepo
 from .services.aggregator_service import AggregatorService
-from .services.bus_info_service import BusInfoService
 from .services.camera_sync_service import CameraSyncService
 from .services.cloudflare_service import CloudflareService
 from .services.grouper_service import FrameGrouper
@@ -27,21 +25,16 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # ── Startup ───────────────────────────────────────────────────────────────
+    # Startup 
     image_svc     = ImageService(target_size=settings.yolo_input_size)
     inference_svc = InferenceService(
         model_path=settings.model_path,
         confidence_threshold=settings.confidence_threshold,
     )
-    queue_repo     = QueueRepo()
-    cloudflare_svc = CloudflareService(queue_repo=queue_repo)
-
-    bus_info_svc = BusInfoService()
-    await bus_info_svc.fetch()  # best-effort; logs warning on failure, does not block startup
+    cloudflare_svc = CloudflareService()
 
     aggregator_svc = AggregatorService(
         cloudflare_svc=cloudflare_svc,
-        bus_info_svc=bus_info_svc,
         flush_interval=settings.aggregator_flush_interval,
         spike_threshold=settings.aggregator_spike_threshold,
     )
@@ -70,23 +63,17 @@ async def lifespan(app: FastAPI):
 
     app.state.image_svc      = image_svc
     app.state.inference_svc  = inference_svc
-    app.state.queue_repo     = queue_repo
     app.state.cloudflare_svc = cloudflare_svc
-    app.state.bus_info_svc   = bus_info_svc
     app.state.grouper        = grouper
 
-    retry_task      = asyncio.create_task(_retry_loop(cloudflare_svc))
     aggregator_task = asyncio.create_task(aggregator_svc.run_loop())
-    bus_info_task   = asyncio.create_task(bus_info_svc.run_loop())
     camera_sync_task = asyncio.create_task(camera_sync_svc.run_loop())
 
     logger.info("AI service started")
     yield
 
-    # ── Shutdown ──────────────────────────────────────────────────────────────
-    retry_task.cancel()
+    # Shutdown 
     aggregator_task.cancel()
-    bus_info_task.cancel()
     camera_sync_task.cancel()
     logger.info("AI service stopped")
 
@@ -126,15 +113,6 @@ async def _log_requests(request: Request, call_next) -> Response:
     logger.log(level, "← %s %s  %d  [%.1f ms]",
                request.method, request.url.path, response.status_code, elapsed)
     return response
-
-
-async def _retry_loop(cloudflare_svc: CloudflareService) -> None:
-    while True:
-        await asyncio.sleep(settings.retry_interval_seconds)
-        try:
-            await cloudflare_svc.flush_queue()
-        except Exception as exc:
-            logger.error("Retry loop error: %s", exc)
 
 
 if __name__ == "__main__":

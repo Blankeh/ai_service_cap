@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock
 
 from src.main import app
 from src.repos.database import init_engine
-from src.repos.queue_repo import QueueRepo
 from src.services.grouper_service import FrameGrouper
 from src.services.image_service import ImageService
 
@@ -50,11 +49,6 @@ def dummy_jpeg() -> bytes:
 
 
 @pytest.fixture()
-def mock_queue_repo() -> QueueRepo:
-    return QueueRepo()
-
-
-@pytest.fixture()
 def mock_grouper() -> AsyncMock:
     svc = AsyncMock(spec=FrameGrouper)
     svc.add_frame.return_value = {
@@ -68,13 +62,12 @@ def mock_grouper() -> AsyncMock:
 
 # ── TestClient factory ─────────────────────────────────────────────────────────
 
-def build_client(queue_repo=None, grouper=None):
+def build_client(grouper=None):
     from fastapi.testclient import TestClient
-    app.state.queue_repo = queue_repo
-    app.state.grouper    = grouper
+    app.state.grouper = grouper
     return TestClient(app, raise_server_exceptions=True)
 
 
 @pytest.fixture()
-def client(mock_queue_repo, mock_grouper):
-    return build_client(queue_repo=mock_queue_repo, grouper=mock_grouper)
+def client(mock_grouper):
+    return build_client(grouper=mock_grouper)
