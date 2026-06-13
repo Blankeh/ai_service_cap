@@ -79,13 +79,28 @@ else
 fi
 
 # --- 1. Virtualenv + dependencies (auto-create if missing) -------------------
+# Notes for the Pi (ARM, no GPU):
+#  * Install CPU-only PyTorch. The default aarch64 torch wheel declares ~2 GB of
+#    NVIDIA CUDA deps (cuDNN etc.) that are useless here and blow up the install.
+#  * Stage pip's temp files on disk: /tmp is a small RAM-backed tmpfs on Pi OS,
+#    too small for the torch wheels, so a default install fails with ENOSPC.
 VENV_DIR="${APP_DIR}/.venv"
+PIP_TMP="${APP_DIR}/.pip_tmp"
+TORCH_CPU_INDEX="https://download.pytorch.org/whl/cpu"
 if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
     echo "Creating virtualenv at ${VENV_DIR} ..."
     # Run as the project user so the venv isn't owned by root.
     sudo -u "${RUN_USER}" python3 -m venv "${VENV_DIR}"
-    sudo -u "${RUN_USER}" "${VENV_DIR}/bin/pip" install --upgrade pip
-    sudo -u "${RUN_USER}" "${VENV_DIR}/bin/pip" install -r "${APP_DIR}/requirements.txt"
+    sudo -u "${RUN_USER}" mkdir -p "${PIP_TMP}"
+    sudo -u "${RUN_USER}" env TMPDIR="${PIP_TMP}" \
+        "${VENV_DIR}/bin/pip" install --upgrade pip
+    # CPU-only torch first — its wheel pulls no nvidia-* packages.
+    sudo -u "${RUN_USER}" env TMPDIR="${PIP_TMP}" \
+        "${VENV_DIR}/bin/pip" install torch torchvision --index-url "${TORCH_CPU_INDEX}"
+    # Rest of the deps — torch is already satisfied, so no CUDA gets pulled.
+    sudo -u "${RUN_USER}" env TMPDIR="${PIP_TMP}" \
+        "${VENV_DIR}/bin/pip" install -r "${APP_DIR}/requirements.txt"
+    rm -rf "${PIP_TMP}"
 else
     echo "Virtualenv already present — skipping create. (Update deps manually if needed.)"
 fi
