@@ -20,8 +20,10 @@ The installer automatically:
 1. **Installs system prerequisites** — detects the package manager
    (apt / dnf / yum / zypper / pacman) and installs python3, the venv module,
    and pip if any are missing.
-2. **Creates the virtualenv** (`.venv`) and installs `requirements.txt` if it
-   isn't there yet.
+2. **Creates the virtualenv** (`.venv`) and installs dependencies if not present
+   — CPU-only PyTorch (the default aarch64 torch wheel would drag in ~2 GB of
+   useless NVIDIA CUDA libs), with pip's temp files staged on disk instead of
+   the Pi's tiny RAM-backed `/tmp` (avoids the `No space left on device` error).
 3. **Configures the journal** to be persistent across reboots and capped at
    200 MB so it never fills the SD card.
 4. **Installs, enables, and starts** the systemd unit — auto-detecting the
