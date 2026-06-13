@@ -1,0 +1,19 @@
+description: Ultralytics best model trained on merged_dataset\data.yaml
+author: Ultralytics
+date: '2026-06-13T21:17:32.583417'
+version: 8.4.50
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: detect
+batch: 1
+imgsz:
+- 640
+- 640
+names:
+  0: person
+args:
+  batch: 1
+  half: false
+channels: 3
+end2end: false
