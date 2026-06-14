@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 import numpy as np
 import pytest
 
-from src.services.roi_service import FULL_FRAME, count_in_roi, resolve_roi
+from src.services.roi_service import FULL_FRAME, count_in_roi, resolve_roi, validate_rois
 
 # Square no-padding letterbox meta → normalized = pixel / 640
 META = {"pad_left": 0, "pad_top": 0, "new_w": 640, "new_h": 640, "scale": 1.0}
@@ -34,6 +34,48 @@ class TestResolveRoi:
         from src.core.config import settings
         monkeypatch.setattr(settings, "camera_rois", {"front": [0.0, 0.0]})
         assert resolve_roi("CAM-front") == FULL_FRAME
+
+    def test_unconfigured_pane_warns_once(self, monkeypatch, caplog):
+        from src.core.config import settings
+        import src.services.roi_service as roi
+        monkeypatch.setattr(settings, "camera_rois", {"front": [0.0, 0.0, 1.0, 0.5]})
+        roi._warned_missing.clear()
+        with caplog.at_level("WARNING"):
+            assert resolve_roi("CAM-rear") == FULL_FRAME
+            resolve_roi("CAM-rear")  # second call must NOT warn again
+        warns = [r for r in caplog.records if "No ROI configured" in r.getMessage()]
+        assert len(warns) == 1
+
+    def test_no_warning_when_no_rois_configured(self, monkeypatch, caplog):
+        from src.core.config import settings
+        import src.services.roi_service as roi
+        monkeypatch.setattr(settings, "camera_rois", {})
+        roi._warned_missing.clear()
+        with caplog.at_level("WARNING"):
+            assert resolve_roi("CAM-front") == FULL_FRAME
+        assert not [r for r in caplog.records if "No ROI configured" in r.getMessage()]
+
+
+class TestValidateRois:
+    def test_valid_rois_no_problems(self, monkeypatch):
+        from src.core.config import settings
+        monkeypatch.setattr(settings, "camera_rois", {"front": [0.0, 0.0, 1.0, 0.5]})
+        assert validate_rois() == []
+
+    def test_flags_inverted_box(self, monkeypatch):
+        from src.core.config import settings
+        monkeypatch.setattr(settings, "camera_rois", {"front": [0.5, 0.0, 0.4, 1.0]})  # x1 > x2
+        assert validate_rois()
+
+    def test_flags_out_of_range(self, monkeypatch):
+        from src.core.config import settings
+        monkeypatch.setattr(settings, "camera_rois", {"front": [0.0, 0.0, 1.2, 1.0]})  # x2 > 1
+        assert validate_rois()
+
+    def test_flags_non_numeric(self, monkeypatch):
+        from src.core.config import settings
+        monkeypatch.setattr(settings, "camera_rois", {"front": [0.0, 0.0]})  # only 2 values
+        assert validate_rois()
 
 
 class TestCountInRoi:

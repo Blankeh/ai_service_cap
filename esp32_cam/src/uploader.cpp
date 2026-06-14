@@ -7,7 +7,7 @@
 
 static const char* BOUNDARY = "----ESP32CAMBound";
 
-bool uploaderPost(camera_fb_t* fb, uint32_t capturedAt) {
+bool uploaderPost(camera_fb_t* fb, uint32_t capturedAt, uint32_t syncRoundId) {
     if (!fb || !fb->buf || fb->len == 0) return false;
 
     // Build multipart body in three segments so we avoid a second copy:
@@ -66,6 +66,11 @@ bool uploaderPost(camera_fb_t* fb, uint32_t capturedAt) {
     http.addHeader("Content-Type",
                    "multipart/form-data; boundary=" + String(BOUNDARY));
     http.addHeader("X-Captured-At", String(capturedAt));
+    // Shared across all cameras in this trigger — lets the Pi group the round
+    // together without NTP-bucket boundary splits. Omit when unknown (0).
+    if (syncRoundId != 0) {
+        http.addHeader("X-Sync-Round", String(syncRoundId));
+    }
 
     const uint32_t t0 = millis();
     int code = http.POST(body, totalLen);

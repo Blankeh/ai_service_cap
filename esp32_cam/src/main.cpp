@@ -41,15 +41,19 @@ static bool wifiConnect() {
 
 // ── Capture one frame and POST it to the Pi ───────────────────────────────────
 static void captureAndUpload() {
+    // The trigger ts is shared by every camera in this round — use it as the
+    // sync-round id so the Pi groups them together. Snapshot once (volatile).
+    const uint32_t syncRoundId = g_triggerServerTs;
+
     // Prefer our own NTP time for accuracy; fall back to the server's timestamp
     // embedded in the trigger packet if NTP hasn't synced yet.
-    uint32_t capturedAt = ntpIsSynced() ? ntpUnixTime() : g_triggerServerTs;
+    uint32_t capturedAt = ntpIsSynced() ? ntpUnixTime() : syncRoundId;
 
     camera_fb_t* fb = captureFrame();
     if (!fb) return;
 
     delay(200);
-    uploaderPost(fb, capturedAt);
+    uploaderPost(fb, capturedAt, syncRoundId);
     esp_camera_fb_return(fb);
 }
 

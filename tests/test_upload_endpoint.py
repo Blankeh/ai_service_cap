@@ -49,6 +49,18 @@ class TestUploadSuccess:
         call = mock_grouper.add_frame.call_args
         assert call.args[4] == 1000
 
+    def test_sync_round_header_forwarded(self, mock_grouper, dummy_jpeg):
+        c = build_client(grouper=mock_grouper)
+        _post_frame(c, dummy_jpeg, extra_headers={"X-Sync-Round": "1700000000"})
+        call = mock_grouper.add_frame.call_args
+        assert call.args[5] == 1700000000   # sixth positional: sync_round
+
+    def test_sync_round_omitted_passes_none(self, mock_grouper, dummy_jpeg):
+        c = build_client(grouper=mock_grouper)
+        _post_frame(c, dummy_jpeg)  # no X-Sync-Round header
+        call = mock_grouper.add_frame.call_args
+        assert call.args[5] is None
+
     def test_different_device_ids_accepted(self, mock_grouper, dummy_jpeg):
         c = build_client(grouper=mock_grouper)
         for dev in ("CAM-front", "CAM-rear", "CAM-mid"):
