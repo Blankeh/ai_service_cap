@@ -7,7 +7,8 @@
 
 static const char* BOUNDARY = "----ESP32CAMBound";
 
-bool uploaderPost(camera_fb_t* fb, uint32_t capturedAt, uint32_t syncRoundId) {
+bool uploaderPost(camera_fb_t* fb, uint32_t capturedAt, uint32_t syncRoundId,
+                  const String& serverHost) {
     if (!fb || !fb->buf || fb->len == 0) return false;
 
     // Build multipart body in three segments so we avoid a second copy:
@@ -49,7 +50,7 @@ bool uploaderPost(camera_fb_t* fb, uint32_t capturedAt, uint32_t syncRoundId) {
     memcpy(ptr, epilogue.c_str(),       epilogue.length());
 
     const String url =
-        "http://" + String(SERVER_HOST) + ":" + SERVER_PORT + UPLOAD_PATH;
+        "http://" + serverHost + ":" + SERVER_PORT + UPLOAD_PATH;
 
     // Context printed with every result so a failure is diagnosable on its own:
     // weak RSSI → transport errors; low heap → POST allocation failures.

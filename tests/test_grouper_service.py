@@ -90,3 +90,28 @@ class TestEarlyFire:
         agg.push.assert_not_awaited()
         assert len(grouper._groups) == 1
         _cancel_pending_timers(grouper)
+
+
+class TestStragglerGuard:
+    async def test_late_frame_after_processing_is_dropped(self):
+        # Round of 2 cameras early-fires and pushes the combined count. A 3rd
+        # camera then replies late for the SAME round — it must be dropped, not
+        # re-opened into a new partial group that overwrites the good count.
+        grouper, agg = _make_grouper(expected_cameras=2)
+        await grouper.add_frame("34", "CAM-front", b"x", "ts", sync_round=9)
+        await grouper.add_frame("34", "CAM-rear", b"x", "ts", sync_round=9)
+        agg.push.assert_awaited_once()          # round already processed
+
+        res = await grouper.add_frame("34", "CAM-mid", b"x", "ts", sync_round=9)
+        assert res["received"] == []            # dropped
+        agg.push.assert_awaited_once()          # NO second (partial) push
+        assert grouper._groups == {}            # no new group opened
+
+    async def test_processed_history_is_bounded(self):
+        from src.services.grouper_service import _PROCESSED_HISTORY
+        grouper, _agg = _make_grouper(expected_cameras=1)
+        # Each round of 1 camera processes immediately; push more than the cap.
+        for r in range(_PROCESSED_HISTORY + 50):
+            await grouper.add_frame("34", "CAM-front", b"x", "ts", sync_round=r)
+        assert len(grouper._processed_keys) == _PROCESSED_HISTORY
+        assert len(grouper._processed_set) == _PROCESSED_HISTORY

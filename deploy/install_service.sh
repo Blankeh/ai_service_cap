@@ -104,14 +104,14 @@ else
     echo "Installing dependencies (CPU-only torch; pip temp staged on disk) ..."
     sudo -u "${RUN_USER}" mkdir -p "${PIP_TMP}"
     sudo -u "${RUN_USER}" env TMPDIR="${PIP_TMP}" \
-        "${VENV_DIR}/bin/pip" install --upgrade pip
+        "${PYTHON}" -m pip install --upgrade pip
     # CPU-only torch first — its wheel pulls no nvidia-* packages (the default
     # aarch64 torch would drag in ~2 GB of useless CUDA libs).
     sudo -u "${RUN_USER}" env TMPDIR="${PIP_TMP}" \
-        "${VENV_DIR}/bin/pip" install torch torchvision --index-url "${TORCH_CPU_INDEX}"
+        "${PYTHON}" -m pip install torch torchvision --index-url "${TORCH_CPU_INDEX}"
     # Rest of the deps — torch is already satisfied, so no CUDA gets pulled.
     sudo -u "${RUN_USER}" env TMPDIR="${PIP_TMP}" \
-        "${VENV_DIR}/bin/pip" install -r "${APP_DIR}/requirements.txt"
+        "${PYTHON}" -m pip install -r "${APP_DIR}/requirements.txt"
     rm -rf "${PIP_TMP}"
     # Hard fail if deps still aren't importable — don't enable a broken service.
     if ! sudo -u "${RUN_USER}" "${PYTHON}" -c "import uvicorn, fastapi, ultralytics, torch, cv2" 2>/dev/null; then
@@ -144,9 +144,10 @@ systemctl restart systemd-journald
 echo "Journal configured -> persistent, capped at 200M (${JOURNALD_DROPIN})"
 
 # --- 3. Render, install, enable + start the unit -----------------------------
+# The unit pins the venv interpreter as __APP_DIR__/.venv/bin/python itself, so
+# only the user and project dir need substituting here.
 sed -e "s|__USER__|${RUN_USER}|g" \
     -e "s|__APP_DIR__|${APP_DIR}|g" \
-    -e "s|__PYTHON__|${PYTHON}|g" \
     "${UNIT_SRC}" > "${UNIT_DST}"
 echo "Installed unit -> ${UNIT_DST}"
 

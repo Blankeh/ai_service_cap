@@ -37,7 +37,11 @@ void udpListenerLoop() {
     if (!cmd || strcmp(cmd, "capture") != 0) return;
 
     uint32_t ts = doc["ts"] | 0;
-    Serial.printf("[UDP] Trigger received (server_ts=%lu)\n", (unsigned long)ts);
+    // Source address of the trigger = the Pi. Captured before the callback so
+    // the camera can upload back to it without a hardcoded server IP.
+    IPAddress src = _udp.remoteIP();
+    Serial.printf("[UDP] Trigger received (server_ts=%lu from %s)\n",
+                  (unsigned long)ts, src.toString().c_str());
 
-    if (_cb) _cb(ts);
+    if (_cb) _cb(ts, src);
 }
