@@ -30,3 +30,10 @@
 // ─── Frame settings ───────────────────────────────────────────────────────────
 #define FRAME_SIZE    FRAMESIZE_VGA   // 640×480  (requires PSRAM)
 #define JPEG_QUALITY  12              // 0 = best quality, 63 = worst
+
+// ─── Image orientation ────────────────────────────────────────────────────────
+// Match each camera's physical mounting (1 = flip, 0 = normal).
+//   vertical flip only ....... CAM_VFLIP 1, CAM_HMIRROR 0
+//   upside-down (180° mount) .. CAM_VFLIP 1, CAM_HMIRROR 1
+#define CAM_VFLIP     1
+#define CAM_HMIRROR   0

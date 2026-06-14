@@ -75,6 +75,10 @@ bool cameraInit() {
     s->set_aec2(s,          1);   // AEC DSP
     s->set_gain_ctrl(s,     1);   // auto gain
 
+    // Orientation — match the camera's physical mounting (see config.h).
+    s->set_vflip(s,   CAM_VFLIP);
+    s->set_hmirror(s, CAM_HMIRROR);
+
     Serial.println("[Camera] Initialised OK");
     return true;
 }
