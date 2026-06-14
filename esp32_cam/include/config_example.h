@@ -6,7 +6,9 @@
 #define WIFI_TIMEOUT_MS  15000
 
 // ─── Raspberry Pi AI-service ──────────────────────────────────────────────────
-#define SERVER_HOST  "192.168.1.100"   // Pi's IP address
+// The Pi's IP is auto-discovered from the UDP sync trigger's source address, so
+// it no longer needs hardcoding here (survives DHCP changes). Only the port and
+// path are fixed.
 #define SERVER_PORT  8000
 #define UPLOAD_PATH  "/api/v1/upload"
 

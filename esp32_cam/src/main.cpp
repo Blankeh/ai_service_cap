@@ -18,7 +18,7 @@ static IPAddress         g_serverIp;   // Pi's IP, learned from the trigger (0.0
 static void onCaptureTrigger(uint32_t serverTs, IPAddress serverIp) {
     g_triggerServerTs = serverTs;
     // Safety: only trust a server on our own subnet, so a rogue broadcast can't
-    // redirect uploads off-network. Until a valid one arrives we use SERVER_HOST.
+    // redirect uploads off-network. Until a valid one arrives, uploads are skipped.
     const uint32_t mask = (uint32_t)WiFi.subnetMask();
     if (((uint32_t)serverIp & mask) == ((uint32_t)WiFi.localIP() & mask)) {
         g_serverIp = serverIp;
@@ -57,14 +57,18 @@ static void captureAndUpload() {
     // sync-round id so the Pi groups them together. Snapshot once (volatile).
     const uint32_t syncRoundId = g_triggerServerTs;
 
+    // The Pi's IP is learned from the sync trigger's source address. Uploads are
+    // trigger-driven, so it's normally set by the very trigger that woke us; if
+    // not (e.g. an off-subnet trigger was rejected), skip rather than guess.
+    if ((uint32_t)g_serverIp == 0) {
+        Serial.println("[Upload] Server IP not learned from sync trigger yet — skipping");
+        return;
+    }
+    const String serverHost = g_serverIp.toString();
+
     // Prefer our own NTP time for accuracy; fall back to the server's timestamp
     // embedded in the trigger packet if NTP hasn't synced yet.
     uint32_t capturedAt = ntpIsSynced() ? ntpUnixTime() : syncRoundId;
-
-    // Upload to the IP we learned from the trigger; fall back to the compiled-in
-    // SERVER_HOST until the first trigger arrives.
-    const String serverHost =
-        ((uint32_t)g_serverIp != 0) ? g_serverIp.toString() : String(SERVER_HOST);
 
     camera_fb_t* fb = captureFrame();
     if (!fb) return;
