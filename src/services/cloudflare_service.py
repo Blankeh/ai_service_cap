@@ -11,11 +11,12 @@ logger = logging.getLogger(__name__)
 
 class CloudflareService:
     def __init__(self) -> None:
-        self._upload_url = settings.cloudflare_api_url.rstrip("/") + "/occupancy"
-        self.headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {settings.cloudflare_api_key}",
-        }
+        self._upload_url = settings.cloudflare_api_url.rstrip("/") + "/device"
+        self.headers = {"Content-Type": "application/json"}
+        # Auth is optional — only sent when a key is configured. The backend at
+        # /device accepts a plain JSON POST with no API key.
+        if settings.cloudflare_api_key and settings.cloudflare_api_key != "your_api_key_here":
+            self.headers["Authorization"] = f"Bearer {settings.cloudflare_api_key}"
 
     async def send(self, payload: dict) -> bool:
         try:
@@ -29,8 +30,8 @@ class CloudflareService:
 
         logger.info("[Cloudflare] Payload → %s", validated.model_dump_json())
 
-        if not settings.cloudflare_api_url or not settings.cloudflare_api_key or settings.cloudflare_api_key == "your_api_key_here":
-            logger.info("[Cloudflare] No API configured — dummy mode, payload logged above")
+        if not settings.cloudflare_api_url:
+            logger.info("[Cloudflare] No URL configured — dummy mode, payload logged above")
             return True
 
         try:
