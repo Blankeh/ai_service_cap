@@ -1,25 +1,31 @@
 import json
 import logging
 import os
+from typing import Annotated
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
 
-def _parse_camera_rois() -> dict:
+def _parse_camera_rois(raw) -> dict:
     """
     Parse CAMERA_ROIS — a JSON map of pane → normalized [x1,y1,x2,y2] ROI box.
 
     Example: {"front": [0.0, 0.0, 1.0, 0.5], "rear": [0.0, 0.5, 1.0, 1.0]}
     Panes with no entry fall back to the full frame (count everything).
+
+    Accepts the raw env string (or an already-parsed dict). An unset, empty, or
+    invalid value yields {} — never a startup crash.
     """
-    raw = os.getenv("CAMERA_ROIS", "").strip()
-    if not raw:
+    if isinstance(raw, dict):
+        return raw
+    if not raw or not str(raw).strip():
         return {}
     try:
         return json.loads(raw)
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, TypeError) as exc:
         logger.warning("Invalid CAMERA_ROIS JSON (%s) — ignoring, using full-frame ROIs", exc)
         return {}
 
@@ -50,6 +56,9 @@ class Settings(BaseSettings):
     # Frame grouper
     group_window_ms: int = int(os.getenv("GROUP_WINDOW_MS", "1000"))  # deadline after first frame arrives
     group_bucket_size: int = int(os.getenv("GROUP_BUCKET_SIZE", "2"))  # must match ESP32 capture interval (seconds)
+    # Number of cameras per bus — when >0 a group is processed as soon as this
+    # many frames arrive (early-fire), instead of always waiting out the deadline.
+    expected_cameras: int = int(os.getenv("EXPECTED_CAMERAS", "0"))
 
     # Bus identification — this Pi's bus
     bus_id: int = int(os.getenv("BUS_ID", "0"))
@@ -58,7 +67,14 @@ class Settings(BaseSettings):
     camera_id_template: str = os.getenv("CAMERA_ID_TEMPLATE", "CAM-BUS{bus}-{pos}")
 
     # Per-pane ROI boxes (normalized 0..1), selected by camera device_id/pane.
-    camera_rois: dict = _parse_camera_rois()
+    # NoDecode: don't let pydantic JSON-decode the raw env value (an empty
+    # CAMERA_ROIS= would crash startup); the validator below parses it safely.
+    camera_rois: Annotated[dict, NoDecode] = {}
+
+    @field_validator("camera_rois", mode="before")
+    @classmethod
+    def _decode_camera_rois(cls, v) -> dict:
+        return _parse_camera_rois(v)
 
     # UDP broadcast camera-sync
     camera_sync_enabled: bool = os.getenv("CAMERA_SYNC_ENABLED", "true").lower() == "true"

@@ -87,28 +87,47 @@ fi
 VENV_DIR="${APP_DIR}/.venv"
 PIP_TMP="${APP_DIR}/.pip_tmp"
 TORCH_CPU_INDEX="https://download.pytorch.org/whl/cpu"
-if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
+PYTHON="${VENV_DIR}/bin/python"
+
+# Create the venv if it isn't there yet (owned by the project user, not root).
+if [[ ! -x "${PYTHON}" ]]; then
     echo "Creating virtualenv at ${VENV_DIR} ..."
-    # Run as the project user so the venv isn't owned by root.
     sudo -u "${RUN_USER}" python3 -m venv "${VENV_DIR}"
+fi
+
+# Always verify the deps are actually importable — a venv can exist but be empty
+# or half-built (e.g. an earlier install ran out of space). Install only if
+# something is missing, so a complete venv is a no-op and re-runs stay fast.
+if sudo -u "${RUN_USER}" "${PYTHON}" -c "import uvicorn, fastapi, ultralytics, torch, cv2" 2>/dev/null; then
+    echo "Dependencies present."
+else
+    echo "Installing dependencies (CPU-only torch; pip temp staged on disk) ..."
     sudo -u "${RUN_USER}" mkdir -p "${PIP_TMP}"
     sudo -u "${RUN_USER}" env TMPDIR="${PIP_TMP}" \
-        "${VENV_DIR}/bin/pip" install --upgrade pip
-    # CPU-only torch first — its wheel pulls no nvidia-* packages.
+        "${PYTHON}" -m pip install --upgrade pip
+    # CPU-only torch first — its wheel pulls no nvidia-* packages (the default
+    # aarch64 torch would drag in ~2 GB of useless CUDA libs).
     sudo -u "${RUN_USER}" env TMPDIR="${PIP_TMP}" \
-        "${VENV_DIR}/bin/pip" install torch torchvision --index-url "${TORCH_CPU_INDEX}"
+        "${PYTHON}" -m pip install torch torchvision --index-url "${TORCH_CPU_INDEX}"
     # Rest of the deps — torch is already satisfied, so no CUDA gets pulled.
     sudo -u "${RUN_USER}" env TMPDIR="${PIP_TMP}" \
-        "${VENV_DIR}/bin/pip" install -r "${APP_DIR}/requirements.txt"
+        "${PYTHON}" -m pip install -r "${APP_DIR}/requirements.txt"
     rm -rf "${PIP_TMP}"
-else
-    echo "Virtualenv already present — skipping create. (Update deps manually if needed.)"
+    # Hard fail if deps still aren't importable — don't enable a broken service.
+    if ! sudo -u "${RUN_USER}" "${PYTHON}" -c "import uvicorn, fastapi, ultralytics, torch, cv2" 2>/dev/null; then
+        echo "ERROR: dependency install did not complete — check pip output above." >&2
+        exit 1
+    fi
 fi
-PYTHON="${VENV_DIR}/bin/python"
 echo "Python      : ${PYTHON}"
 
+# Is the service actually configured? Only START it now if .env exists; either
+# way it gets enabled so it comes up on the next boot once configured. This
+# avoids launching a guaranteed crash-loop on a half-set-up Pi.
+HAVE_ENV=true
 if [[ ! -f "${APP_DIR}/.env" ]]; then
-    echo "WARNING: ${APP_DIR}/.env not found — copy and fill it before the service will work." >&2
+    HAVE_ENV=false
+    echo "WARNING: ${APP_DIR}/.env not found — will enable on boot but NOT start now." >&2
 fi
 
 # --- 2. Persistent, size-capped journal --------------------------------------
@@ -125,18 +144,25 @@ systemctl restart systemd-journald
 echo "Journal configured -> persistent, capped at 200M (${JOURNALD_DROPIN})"
 
 # --- 3. Render, install, enable + start the unit -----------------------------
+# The unit pins the venv interpreter as __APP_DIR__/.venv/bin/python itself, so
+# only the user and project dir need substituting here.
 sed -e "s|__USER__|${RUN_USER}|g" \
     -e "s|__APP_DIR__|${APP_DIR}|g" \
-    -e "s|__PYTHON__|${PYTHON}|g" \
     "${UNIT_SRC}" > "${UNIT_DST}"
 echo "Installed unit -> ${UNIT_DST}"
 
 systemctl daemon-reload
 systemctl enable "${SERVICE_NAME}.service"
-systemctl restart "${SERVICE_NAME}.service"
 
-echo
-systemctl --no-pager --full status "${SERVICE_NAME}.service" || true
-echo
-echo "All set. The service is running and will auto-start on every boot."
-echo "Follow logs with:  journalctl -u ${SERVICE_NAME} -f"
+if [[ "${HAVE_ENV}" == "true" ]]; then
+    systemctl restart "${SERVICE_NAME}.service"
+    echo
+    systemctl --no-pager --full status "${SERVICE_NAME}.service" || true
+    echo
+    echo "All set. The service is running and will auto-start on every boot."
+    echo "Follow logs with:  journalctl -u ${SERVICE_NAME} -f"
+else
+    echo
+    echo "Service ENABLED for boot but NOT started (no .env yet)."
+    echo "Create ${APP_DIR}/.env, then:  sudo systemctl start ${SERVICE_NAME}"
+fi

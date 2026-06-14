@@ -19,6 +19,7 @@ which flushes one Cloudflare payload per camera.
 
 import asyncio
 import logging
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
@@ -26,6 +27,11 @@ from typing import Optional
 from .roi_service import count_in_roi, resolve_roi
 
 logger = logging.getLogger(__name__)
+
+# How many recently-processed round keys to remember, so a straggler arriving
+# after its round was already processed is dropped instead of re-pushing a
+# partial count. 128 rounds ≈ several minutes at a 2 s cadence — plenty.
+_PROCESSED_HISTORY = 128
 
 
 @dataclass
@@ -49,17 +55,23 @@ class FrameGrouper:
         image_svc,
         inference_svc,
         aggregator_svc,
-        group_window_ms: int = 500,
-        bucket_size:     int = 2,
+        group_window_ms:  int = 500,
+        bucket_size:      int = 2,
         dev_viewer=None,
+        expected_cameras: int = 0,
     ) -> None:
-        self.image_svc       = image_svc
-        self.inference_svc   = inference_svc
-        self.aggregator_svc  = aggregator_svc
-        self.group_window_ms = group_window_ms
-        self.bucket_size     = bucket_size
-        self.dev_viewer      = dev_viewer  # DevViewer in dev, None in prod
+        self.image_svc        = image_svc
+        self.inference_svc    = inference_svc
+        self.aggregator_svc   = aggregator_svc
+        self.group_window_ms  = group_window_ms
+        self.bucket_size      = bucket_size
+        self.dev_viewer       = dev_viewer  # DevViewer in dev, None in prod
+        self.expected_cameras = expected_cameras  # 0 = disabled (wait for deadline only)
         self._groups: dict[tuple[str, int], _BusGroup] = {}
+        # Recently-processed round keys (FIFO + set for O(1) lookup) so late
+        # stragglers don't re-open a finished round and push a partial count.
+        self._processed_keys: deque[tuple[str, int]] = deque()
+        self._processed_set:  set[tuple[str, int]]   = set()
 
     def _bucket(self, captured_at: int) -> int:
         return (captured_at // self.bucket_size) * self.bucket_size
@@ -71,17 +83,42 @@ class FrameGrouper:
         raw_bytes:   bytes,
         timestamp:   str,
         captured_at: Optional[int] = None,
+        sync_round:  Optional[int] = None,
     ) -> dict:
         """
-        Buffer a frame into its NTP bucket group.
-        Returns immediately — processing fires after group_window_ms deadline.
+        Buffer a frame into its group, then return immediately.
+
+        Frames are grouped by sync_round when the camera supplies one (the shared
+        ts the Pi broadcast in the capture trigger, echoed back as X-Sync-Round) —
+        every camera in one trigger shares an identical round_key, so a round can
+        never split across an NTP bucket boundary. Without the header we fall back
+        to the captured_at bucket (unchanged behaviour for old firmware).
+
+        Processing fires after the group_window_ms deadline, or as soon as all
+        expected_cameras frames have arrived (whichever is first).
         """
         unix_ts   = captured_at or int(datetime.now(timezone.utc).timestamp())
-        bucket    = self._bucket(unix_ts)
-        group_key = (bus_id, bucket)
+        round_key = sync_round if sync_round is not None else self._bucket(unix_ts)
+        group_key = (bus_id, round_key)
+
+        # Straggler guard: if this round was already processed (deadline expired
+        # or the other cameras early-fired it), drop the late frame. Re-opening
+        # the round would push a partial count that overwrites the correct one.
+        if group_key in self._processed_set:
+            logger.warning(
+                "[Grouper] Late frame for already-processed round bus=%s round=%d "
+                "device=%s — dropped (arrived after the grouping window)",
+                bus_id, round_key, device_id,
+            )
+            return {
+                "bus_id":   bus_id,
+                "bucket":   round_key,
+                "device_id": device_id,
+                "received": [],
+            }
 
         if group_key not in self._groups:
-            self._groups[group_key] = _BusGroup(bus_id=bus_id, bucket=bucket)
+            self._groups[group_key] = _BusGroup(bus_id=bus_id, bucket=round_key)
 
         group = self._groups[group_key]
         group.frames[device_id] = _PendingFrame(
@@ -90,16 +127,35 @@ class FrameGrouper:
             captured_at=unix_ts,
         )
 
+        # Early-fire: once every expected camera has reported, process now instead
+        # of waiting out the deadline. The deadline timer remains the fallback for
+        # rounds where a camera is missing/late.
+        if self.expected_cameras > 0 and len(group.frames) >= self.expected_cameras:
+            logger.debug(
+                "[Grouper] bus=%s round=%d: all %d expected cameras arrived — processing early",
+                bus_id, round_key, self.expected_cameras,
+            )
+            if group.timer_task is not None and not group.timer_task.done():
+                group.timer_task.cancel()
+            received = sorted(group.frames)
+            await self._process(group_key)
+            return {
+                "bus_id":   bus_id,
+                "bucket":   round_key,
+                "device_id": device_id,
+                "received": received,
+            }
+
         if group.timer_task is None or group.timer_task.done():
             logger.debug(
-                "[Grouper] bus=%s bucket=%d: starting %dms deadline timer (devices so far: %s)",
-                bus_id, bucket, self.group_window_ms, sorted(group.frames),
+                "[Grouper] bus=%s round=%d: starting %dms deadline timer (devices so far: %s)",
+                bus_id, round_key, self.group_window_ms, sorted(group.frames),
             )
             group.timer_task = asyncio.create_task(self._wait_and_process(group_key))
 
         return {
             "bus_id":   bus_id,
-            "bucket":   bucket,
+            "bucket":   round_key,
             "device_id": device_id,
             "received": sorted(group.frames),
         }
@@ -108,10 +164,21 @@ class FrameGrouper:
         await asyncio.sleep(self.group_window_ms / 1000)
         await self._process(group_key)
 
+    def _mark_processed(self, group_key: tuple[str, int]) -> None:
+        """Record a round as processed (bounded FIFO) for the straggler guard."""
+        if group_key in self._processed_set:
+            return
+        self._processed_set.add(group_key)
+        self._processed_keys.append(group_key)
+        while len(self._processed_keys) > _PROCESSED_HISTORY:
+            self._processed_set.discard(self._processed_keys.popleft())
+
     async def _process(self, group_key: tuple[str, int]) -> None:
         group = self._groups.pop(group_key, None)
         if not group or not group.frames:
             return
+        # Mark before inference so any frame arriving during processing is dropped.
+        self._mark_processed(group_key)
 
         bus_id = group.bus_id
         logger.info(

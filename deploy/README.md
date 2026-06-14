@@ -42,6 +42,18 @@ journalctl -u ai-service -f          # live logs
 journalctl -u ai-service -b          # logs since last boot
 ```
 
+## Uninstall
+
+Remove the systemd deployment (stops + disables the service, removes the unit
+and journald drop-in). **Keeps your data** — `.env`, `logs/`, `data/app.db`, and
+`.venv` are left in place so you can reinstall without redoing setup:
+
+```bash
+sudo bash deploy/uninstall_service.sh
+```
+
+To later reinstall: `sudo bash deploy/install_service.sh`.
+
 ## Notes
 
 - `WorkingDirectory` is the project root because `.env`, the SQLite database

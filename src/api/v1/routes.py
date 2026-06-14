@@ -16,6 +16,7 @@ async def upload_frame(
     file:        UploadFile = File(...),
     device_id:   str        = Form(...),
     captured_at: Optional[int] = Header(None, alias="X-Captured-At"),
+    sync_round:  Optional[int] = Header(None, alias="X-Sync-Round"),
 ):
     """
     Receive a JPEG frame from an ESP32-CAM.
@@ -29,6 +30,11 @@ async def upload_frame(
         X-Captured-At : Unix timestamp (seconds) from NTP — used to bucket
                         simultaneous frames from the same bus together.
                         Falls back to server receive time if omitted.
+        X-Sync-Round  : The shared ts the Pi broadcast in the capture trigger,
+                        echoed back by the camera. When present, all frames from
+                        one trigger group together regardless of NTP-bucket
+                        boundaries. Falls back to X-Captured-At bucketing if
+                        omitted.
 
     Body:
         file (multipart/form-data) : JPEG image
@@ -52,7 +58,9 @@ async def upload_frame(
     bus_id = settings.bus_id
 
     grouper: FrameGrouper = request.app.state.grouper
-    result = await grouper.add_frame(bus_id, device_id, raw_bytes, timestamp, captured_at)
+    result = await grouper.add_frame(
+        bus_id, device_id, raw_bytes, timestamp, captured_at, sync_round
+    )
 
     return UploadResponse(
         device_id=device_id,

@@ -7,7 +7,8 @@
 
 static const char* BOUNDARY = "----ESP32CAMBound";
 
-bool uploaderPost(camera_fb_t* fb, uint32_t capturedAt) {
+bool uploaderPost(camera_fb_t* fb, uint32_t capturedAt, uint32_t syncRoundId,
+                  const String& serverHost) {
     if (!fb || !fb->buf || fb->len == 0) return false;
 
     // Build multipart body in three segments so we avoid a second copy:
@@ -49,7 +50,7 @@ bool uploaderPost(camera_fb_t* fb, uint32_t capturedAt) {
     memcpy(ptr, epilogue.c_str(),       epilogue.length());
 
     const String url =
-        "http://" + String(SERVER_HOST) + ":" + SERVER_PORT + UPLOAD_PATH;
+        "http://" + serverHost + ":" + SERVER_PORT + UPLOAD_PATH;
 
     // Context printed with every result so a failure is diagnosable on its own:
     // weak RSSI → transport errors; low heap → POST allocation failures.
@@ -66,6 +67,11 @@ bool uploaderPost(camera_fb_t* fb, uint32_t capturedAt) {
     http.addHeader("Content-Type",
                    "multipart/form-data; boundary=" + String(BOUNDARY));
     http.addHeader("X-Captured-At", String(capturedAt));
+    // Shared across all cameras in this trigger — lets the Pi group the round
+    // together without NTP-bucket boundary splits. Omit when unknown (0).
+    if (syncRoundId != 0) {
+        http.addHeader("X-Sync-Round", String(syncRoundId));
+    }
 
     const uint32_t t0 = millis();
     int code = http.POST(body, totalLen);

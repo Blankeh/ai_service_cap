@@ -50,6 +50,26 @@ async def lifespan(app: FastAPI):
         )
     app.state.dev_viewer = dev_viewer
 
+    # Surface ROI config in the journal so misconfig is visible, not silent.
+    from .services.roi_service import validate_rois
+    if settings.camera_rois:
+        logger.info("Camera ROIs configured: %s", settings.camera_rois)
+        roi_problems = validate_rois()
+        for problem in roi_problems:
+            logger.error("Malformed ROI — %s", problem)
+        if (
+            settings.expected_cameras
+            and len(settings.camera_rois) != settings.expected_cameras
+        ):
+            logger.warning(
+                "EXPECTED_CAMERAS=%d but %d ROI pane(s) configured (%s) — "
+                "cameras without an ROI will count the full frame",
+                settings.expected_cameras, len(settings.camera_rois),
+                sorted(settings.camera_rois),
+            )
+    else:
+        logger.info("No CAMERA_ROIS set — every camera counts the full frame")
+
     grouper = FrameGrouper(
         image_svc=image_svc,
         inference_svc=inference_svc,
@@ -57,6 +77,7 @@ async def lifespan(app: FastAPI):
         group_window_ms=settings.group_window_ms,
         bucket_size=settings.group_bucket_size,
         dev_viewer=dev_viewer,
+        expected_cameras=settings.expected_cameras,
     )
 
     camera_sync_svc = CameraSyncService()

@@ -12,7 +12,9 @@ Group=__USER__
 WorkingDirectory=__APP_DIR__
 # .env, the SQLite DB (data/app.db) and logs/ are all resolved relative to
 # WorkingDirectory, so this MUST be the project root.
-ExecStart=__PYTHON__ -m src.main
+# Always run via the project's venv interpreter — pinned relative to the project
+# dir so the service can never accidentally fall back to system python.
+ExecStart=__APP_DIR__/.venv/bin/python -m src.main
 # Restart on crash and keep retrying forever (e.g. if a dependency or the SD
 # card is briefly unavailable at boot).
 Restart=always

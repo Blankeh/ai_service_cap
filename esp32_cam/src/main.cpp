@@ -8,13 +8,25 @@
 #include "uploader.h"
 
 // ── Shared trigger state (set by UDP callback, consumed in loop) ──────────────
-static volatile bool     g_triggerPending = false;
+// All accessed only from loop()'s thread (the UDP callback runs synchronously
+// inside udpListenerLoop()), so no ISR/concurrency concerns.
+static volatile bool     g_triggerPending  = false;
 static volatile uint32_t g_triggerServerTs = 0;
+static IPAddress         g_serverIp;   // Pi's IP, learned from the trigger (0.0.0.0 until first)
 
 // ── UDP callback ──────────────────────────────────────────────────────────────
-static void onCaptureTrigger(uint32_t serverTs) {
-    g_triggerServerTs  = serverTs;
-    g_triggerPending   = true;
+static void onCaptureTrigger(uint32_t serverTs, IPAddress serverIp) {
+    g_triggerServerTs = serverTs;
+    // Safety: only trust a server on our own subnet, so a rogue broadcast can't
+    // redirect uploads off-network. Until a valid one arrives we use SERVER_HOST.
+    const uint32_t mask = (uint32_t)WiFi.subnetMask();
+    if (((uint32_t)serverIp & mask) == ((uint32_t)WiFi.localIP() & mask)) {
+        g_serverIp = serverIp;
+    } else {
+        Serial.printf("[UDP] Ignoring off-subnet trigger source %s\n",
+                      serverIp.toString().c_str());
+    }
+    g_triggerPending = true;
 }
 
 // ── WiFi ──────────────────────────────────────────────────────────────────────
@@ -41,15 +53,24 @@ static bool wifiConnect() {
 
 // ── Capture one frame and POST it to the Pi ───────────────────────────────────
 static void captureAndUpload() {
+    // The trigger ts is shared by every camera in this round — use it as the
+    // sync-round id so the Pi groups them together. Snapshot once (volatile).
+    const uint32_t syncRoundId = g_triggerServerTs;
+
     // Prefer our own NTP time for accuracy; fall back to the server's timestamp
     // embedded in the trigger packet if NTP hasn't synced yet.
-    uint32_t capturedAt = ntpIsSynced() ? ntpUnixTime() : g_triggerServerTs;
+    uint32_t capturedAt = ntpIsSynced() ? ntpUnixTime() : syncRoundId;
+
+    // Upload to the IP we learned from the trigger; fall back to the compiled-in
+    // SERVER_HOST until the first trigger arrives.
+    const String serverHost =
+        ((uint32_t)g_serverIp != 0) ? g_serverIp.toString() : String(SERVER_HOST);
 
     camera_fb_t* fb = captureFrame();
     if (!fb) return;
 
     delay(200);
-    uploaderPost(fb, capturedAt);
+    uploaderPost(fb, capturedAt, syncRoundId, serverHost);
     esp_camera_fb_return(fb);
 }
 
