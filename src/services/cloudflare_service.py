@@ -11,10 +11,10 @@ logger = logging.getLogger(__name__)
 
 class CloudflareService:
     def __init__(self) -> None:
-        self._upload_url = settings.cloudflare_api_url.rstrip("/") + "/device"
+        self._upload_url = settings.cloudflare_api_url.rstrip("/") + "/api/v1/device/input"
         self.headers = {"Content-Type": "application/json"}
         # Auth is optional — only sent when a key is configured. The backend at
-        # /device accepts a plain JSON POST with no API key.
+        # /api/v1/device/input accepts a plain JSON POST with no API key.
         if settings.cloudflare_api_key and settings.cloudflare_api_key != "your_api_key_here":
             self.headers["Authorization"] = f"Bearer {settings.cloudflare_api_key}"
 
