@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     # Model
     model_path: str = os.getenv("MODEL_PATH", "yolov8n.pt")
     yolo_input_size: int = int(os.getenv("YOLO_INPUT_SIZE", "640"))
-    confidence_threshold: float = float(os.getenv("CONFIDENCE_THRESHOLD", "0.5"))
+    confidence_threshold: float = float(os.getenv("CONFIDENCE_THRESHOLD", "0.35"))
 
     # Cloudflare backend
     cloudflare_api_url: str = os.getenv("CLOUDFLARE_API_URL", "")
