@@ -14,11 +14,18 @@ No extra dependencies — only cv2.imencode + FastAPI's StreamingResponse.
 
 import asyncio
 import logging
+import time
 
 import cv2
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# Cap the MJPEG output rate. Pushing parts back-to-back faster than the browser
+# can decode makes the <img> stall or show torn frames; ~15 fps renders smoothly
+# and is plenty for a detection viewer (the pipeline produces ~0.5 fps anyway).
+_MAX_STREAM_FPS = 15
+_MIN_FRAME_INTERVAL = 1.0 / _MAX_STREAM_FPS
 
 
 class DevViewer:
@@ -49,8 +56,15 @@ class DevViewer:
             self._cond.notify_all()
 
     async def stream(self, device_id: str):
-        """Yield one MJPEG part each time a new frame arrives for device_id."""
+        """Yield one MJPEG part each time a new frame arrives for device_id.
+
+        Output is paced to _MAX_STREAM_FPS so a burst of frames can't outrun the
+        browser's decoder; intermediate frames are coalesced (only the latest is
+        sent). Each part carries Content-Length so the client can delimit frames
+        without scanning for the next boundary.
+        """
         last_seq = -1
+        last_emit = 0.0
         while True:
             async with self._cond:
                 await self._cond.wait_for(
@@ -59,9 +73,19 @@ class DevViewer:
                 )
                 last_seq = self._seqs[device_id]
                 frame = self._frames[device_id]
+
+            # Pace output: if frames are arriving faster than the cap, wait — the
+            # next loop then grabs the latest frame, so we never fall behind.
+            gap = _MIN_FRAME_INTERVAL - (time.monotonic() - last_emit)
+            if gap > 0:
+                await asyncio.sleep(gap)
+            last_emit = time.monotonic()
+
             yield (
                 b"--frame\r\n"
-                b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
+                b"Content-Type: image/jpeg\r\n"
+                b"Content-Length: " + str(len(frame)).encode() + b"\r\n\r\n"
+                + frame + b"\r\n"
             )
 
     @staticmethod
