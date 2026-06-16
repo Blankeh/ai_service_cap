@@ -66,3 +66,51 @@ class TestSend:
             result = await svc.send(PAYLOAD)
         assert result is True
         mock_post.assert_not_awaited()
+
+
+def _make_auth_svc(token="tok"):
+    from src.services.auth_service import AuthService
+    auth = MagicMock(spec=AuthService)
+    auth._token = token
+    auth.ensure_token = AsyncMock(return_value=token)
+    auth.refresh = AsyncMock(return_value="fresh-tok")
+    auth.auth_header = lambda: (
+        {"Authorization": f"Bearer {auth._token}"} if auth._token else {}
+    )
+    return auth
+
+
+class TestAuthIntegration:
+    @pytest.fixture()
+    def svc_with_auth(self, monkeypatch):
+        from src.core.config import settings
+        monkeypatch.setattr(settings, "cloudflare_api_url", "https://example.com")
+        monkeypatch.setattr(settings, "cloudflare_api_key", "")
+        self.auth = _make_auth_svc()
+        return CloudflareService(auth_svc=self.auth)
+
+    async def test_attaches_bearer_token_from_auth_service(self, svc_with_auth):
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = MagicMock(status_code=200, raise_for_status=lambda: None)
+            result = await svc_with_auth.send(PAYLOAD)
+        assert result is True
+        _, kwargs = mock_post.call_args
+        assert kwargs["headers"]["Authorization"] == "Bearer tok"
+
+    async def test_relogs_in_and_retries_on_401(self, svc_with_auth):
+        expired = MagicMock(status_code=401)
+        ok      = MagicMock(status_code=200, raise_for_status=lambda: None)
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.side_effect = [expired, ok]
+            result = await svc_with_auth.send(PAYLOAD)
+        assert result is True
+        self.auth.refresh.assert_awaited_once()
+        assert mock_post.await_count == 2
+
+    async def test_gives_up_after_second_401(self, svc_with_auth):
+        expired = MagicMock(status_code=401)
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.side_effect = [expired, expired]
+            result = await svc_with_auth.send(PAYLOAD)
+        assert result is False
+        assert mock_post.await_count == 2

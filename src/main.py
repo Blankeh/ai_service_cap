@@ -14,6 +14,7 @@ setup_logging()
 from .api.router import api_router
 from .core.config import settings
 from .services.aggregator_service import AggregatorService
+from .services.auth_service import AuthService
 from .services.camera_sync_service import CameraSyncService
 from .services.cloudflare_service import CloudflareService
 from .services.grouper_service import FrameGrouper
@@ -31,7 +32,10 @@ async def lifespan(app: FastAPI):
         model_path=settings.model_path,
         confidence_threshold=settings.confidence_threshold,
     )
-    cloudflare_svc = CloudflareService()
+    # Device auth — only when a backend URL is configured (empty URL = dummy mode,
+    # nothing to log in to). The login loop keeps requesting a token at startup.
+    auth_svc = AuthService() if settings.cloudflare_api_url else None
+    cloudflare_svc = CloudflareService(auth_svc=auth_svc)
 
     aggregator_svc = AggregatorService(
         cloudflare_svc=cloudflare_svc,
@@ -85,15 +89,21 @@ async def lifespan(app: FastAPI):
     app.state.image_svc      = image_svc
     app.state.inference_svc  = inference_svc
     app.state.cloudflare_svc = cloudflare_svc
+    app.state.auth_svc       = auth_svc
     app.state.grouper        = grouper
 
+    auth_login_task = (
+        asyncio.create_task(auth_svc.run_login_loop()) if auth_svc is not None else None
+    )
     aggregator_task = asyncio.create_task(aggregator_svc.run_loop())
     camera_sync_task = asyncio.create_task(camera_sync_svc.run_loop())
 
     logger.info("AI service started")
     yield
 
-    # Shutdown 
+    # Shutdown
+    if auth_login_task is not None:
+        auth_login_task.cancel()
     aggregator_task.cancel()
     camera_sync_task.cancel()
     logger.info("AI service stopped")
