@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     cloudflare_api_key: str = os.getenv("CLOUDFLARE_API_KEY", "")
     cloudflare_timeout: int = int(os.getenv("CLOUDFLARE_TIMEOUT", "10"))
 
+    # Device auth — backend issues a bearer token from the login endpoint, which
+    # is then attached to every /api/v1/device/input upload. Re-login happens on
+    # demand when an upload comes back 401 (token expired).
+    auth_login_path: str = os.getenv("AUTH_LOGIN_PATH", "/api/v1/auth/login")
+    device_username: str = os.getenv("DEVICE_USERNAME", "device")
+    device_password: str = os.getenv("DEVICE_PASSWORD", "w7ePNd6j8FMSwaKH3v0McATx")
+    auth_login_retry_interval: int = int(os.getenv("AUTH_LOGIN_RETRY_INTERVAL", "10"))
+
     # Database — single SQLite file, all tables
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///data/app.db")
 
