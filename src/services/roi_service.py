@@ -55,27 +55,66 @@ def resolve_roi(device_id: str) -> tuple[float, float, float, float]:
         return FULL_FRAME
 
 
+def validate_box(box) -> str | None:
+    """
+    Return None if `box` is a well-formed normalized ROI, else a reason string.
+
+    A valid box is 4 numbers with 0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1.
+    The strict `<` rejects zero-area (degenerate) boxes.
+    """
+    try:
+        x1, y1, x2, y2 = (float(v) for v in box)
+    except (TypeError, ValueError):
+        return f"not 4 numbers ({box!r})"
+    if not (0.0 <= x1 < x2 <= 1.0 and 0.0 <= y1 < y2 <= 1.0):
+        return (
+            "out of range / inverted "
+            f"(need 0<=x1<x2<=1, 0<=y1<y2<=1; got {[x1, y1, x2, y2]})"
+        )
+    return None
+
+
 def validate_rois() -> list[str]:
     """
     Check every configured ROI box is well-formed and return a list of problems.
 
-    A valid box is 4 numbers with 0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1.
     Called at startup so malformed boxes surface in the journal instead of
     silently mis-counting. Returns [] when all ROIs are valid (or none set).
     """
     problems: list[str] = []
     for pane, raw in settings.camera_rois.items():
-        try:
-            x1, y1, x2, y2 = (float(v) for v in raw)
-        except (TypeError, ValueError):
-            problems.append(f"{pane!r}: not 4 numbers ({raw!r})")
-            continue
-        if not (0.0 <= x1 < x2 <= 1.0 and 0.0 <= y1 < y2 <= 1.0):
-            problems.append(
-                f"{pane!r}: out of range / inverted "
-                f"(need 0<=x1<x2<=1, 0<=y1<y2<=1; got {[x1, y1, x2, y2]})"
-            )
+        reason = validate_box(raw)
+        if reason is not None:
+            problems.append(f"{pane!r}: {reason}")
     return problems
+
+
+def roi_advisories(rois: dict) -> list[str]:
+    """
+    Non-fatal calibration warnings for a set of ROI boxes — never blocks a save.
+
+    Flags pairs of panes whose boxes overlap (people in the overlap are
+    double-counted) and reports the total fraction of the frame left uncovered
+    (people in a gap are missed). Malformed boxes are skipped (validate_box
+    handles those); only well-formed boxes are considered here.
+    """
+    advisories: list[str] = []
+    valid = {p: tuple(float(v) for v in b) for p, b in rois.items()
+             if validate_box(b) is None}
+
+    panes = sorted(valid)
+    for i, a in enumerate(panes):
+        ax1, ay1, ax2, ay2 = valid[a]
+        for b in panes[i + 1:]:
+            bx1, by1, bx2, by2 = valid[b]
+            ox = min(ax2, bx2) - max(ax1, bx1)
+            oy = min(ay2, by2) - max(ay1, by1)
+            if ox > 0 and oy > 0:
+                advisories.append(
+                    f"{a!r} and {b!r} overlap — people in the shared zone are "
+                    f"double-counted"
+                )
+    return advisories
 
 
 def count_in_roi(detections: list[dict], roi: tuple[float, float, float, float], meta: dict) -> int:

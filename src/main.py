@@ -54,6 +54,17 @@ async def lifespan(app: FastAPI):
         )
     app.state.dev_viewer = dev_viewer
 
+    # ROI snapshot store — always on (dev AND prod) so the /roi calibration editor
+    # can run against the deployed Pi. Holds the latest original frame per camera.
+    from .services.snapshot_store import SnapshotStore
+    snapshot_store = SnapshotStore()
+    app.state.snapshot_store = snapshot_store
+
+    # Persisted ROIs (data/camera_rois.json) override CAMERA_ROIS from .env and
+    # are honored in prod too. Load before validating so we check the effective set.
+    from .services import roi_store
+    roi_store.load()
+
     # Surface ROI config in the journal so misconfig is visible, not silent.
     from .services.roi_service import validate_rois
     if settings.camera_rois:
@@ -81,6 +92,7 @@ async def lifespan(app: FastAPI):
         group_window_ms=settings.group_window_ms,
         bucket_size=settings.group_bucket_size,
         dev_viewer=dev_viewer,
+        snapshot_store=snapshot_store,
         expected_cameras=settings.expected_cameras,
     )
 
@@ -122,7 +134,12 @@ app.add_middleware(
 
 app.include_router(api_router, prefix="/api")
 
-# DEV-only viewer routes — mounted only when APP_ENV=dev so prod never exposes them.
+# ROI calibration editor — available in dev AND prod so ROIs can be set up on the
+# deployed Pi. Writes config (unauthenticated, LAN-trust assumption — see roi_routes).
+from .api.roi_routes import roi_router
+app.include_router(roi_router, prefix="/roi")
+
+# DEV-only live detection viewer (MJPEG) — mounted only when APP_ENV=dev.
 if settings.app_env == "dev":
     from .api.dev_routes import dev_router
     app.include_router(dev_router, prefix="/dev")

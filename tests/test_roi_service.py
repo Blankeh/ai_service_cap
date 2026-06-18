@@ -3,7 +3,14 @@ from unittest.mock import AsyncMock, MagicMock
 import numpy as np
 import pytest
 
-from src.services.roi_service import FULL_FRAME, count_in_roi, resolve_roi, validate_rois
+from src.services.roi_service import (
+    FULL_FRAME,
+    count_in_roi,
+    resolve_roi,
+    roi_advisories,
+    validate_box,
+    validate_rois,
+)
 
 # Square no-padding letterbox meta → normalized = pixel / 640
 META = {"pad_left": 0, "pad_top": 0, "new_w": 640, "new_h": 640, "scale": 1.0}
@@ -76,6 +83,41 @@ class TestValidateRois:
         from src.core.config import settings
         monkeypatch.setattr(settings, "camera_rois", {"front": [0.0, 0.0]})  # only 2 values
         assert validate_rois()
+
+
+class TestValidateBox:
+    def test_valid_box(self):
+        assert validate_box([0.0, 0.0, 1.0, 0.5]) is None
+
+    def test_inverted_box(self):
+        assert validate_box([0.5, 0.0, 0.4, 1.0]) is not None
+
+    def test_zero_area_rejected(self):
+        assert validate_box([0.3, 0.0, 0.3, 1.0]) is not None  # x1 == x2
+
+    def test_out_of_range(self):
+        assert validate_box([0.0, 0.0, 1.2, 1.0]) is not None
+
+    def test_wrong_length(self):
+        assert validate_box([0.0, 0.0, 1.0]) is not None
+
+    def test_non_numeric(self):
+        assert validate_box(["a", 0.0, 1.0, 0.5]) is not None
+
+
+class TestRoiAdvisories:
+    def test_tiled_panes_no_overlap(self):
+        rois = {"front": [0.0, 0.0, 1.0, 0.5], "rear": [0.0, 0.5, 1.0, 1.0]}
+        assert roi_advisories(rois) == []
+
+    def test_overlapping_panes_flagged(self):
+        rois = {"front": [0.0, 0.0, 1.0, 0.6], "rear": [0.0, 0.4, 1.0, 1.0]}
+        adv = roi_advisories(rois)
+        assert len(adv) == 1 and "overlap" in adv[0]
+
+    def test_malformed_box_skipped(self):
+        rois = {"front": [0.0, 0.0, 1.0, 0.5], "bad": [0.5, 0.0, 0.4, 1.0]}
+        assert roi_advisories(rois) == []  # bad box ignored, no crash
 
 
 class TestCountInRoi:

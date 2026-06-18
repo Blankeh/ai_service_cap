@@ -58,6 +58,7 @@ class FrameGrouper:
         group_window_ms:  int = 500,
         bucket_size:      int = 2,
         dev_viewer=None,
+        snapshot_store=None,
         expected_cameras: int = 0,
     ) -> None:
         self.image_svc        = image_svc
@@ -66,6 +67,7 @@ class FrameGrouper:
         self.group_window_ms  = group_window_ms
         self.bucket_size      = bucket_size
         self.dev_viewer       = dev_viewer  # DevViewer in dev, None in prod
+        self.snapshot_store   = snapshot_store  # SnapshotStore — set in dev AND prod (ROI editor)
         self.expected_cameras = expected_cameras  # 0 = disabled (wait for deadline only)
         self._groups: dict[tuple[str, int], _BusGroup] = {}
         # Recently-processed round keys (FIFO + set for O(1) lookup) so late
@@ -199,6 +201,11 @@ class FrameGrouper:
                 roi            = resolve_roi(device_id)
                 count          = count_in_roi(result["detections"], roi, meta)
                 any_active     = True
+                if self.snapshot_store is not None:
+                    # Original frame + detections/meta for the ROI editor (dev AND prod).
+                    self.snapshot_store.update(
+                        device_id, frame.raw_bytes, result["detections"], meta
+                    )
                 if self.dev_viewer is not None:
                     # bbox coords are in `enhanced`'s 640×640 letterboxed space
                     await self.dev_viewer.update(
