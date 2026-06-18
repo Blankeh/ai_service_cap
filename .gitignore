@@ -39,6 +39,9 @@ coverage.xml
 # Logs
 *.log
 
+# Runtime ROI calibration state (per-deployment, written by the /roi editor)
+data/camera_rois.json
+
 # Editor/IDE
 .vscode/
 .idea/
