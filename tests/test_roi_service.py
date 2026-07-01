@@ -135,6 +135,41 @@ class TestCountInRoi:
         assert count_in_roi([], (0.0, 0.0, 1.0, 0.5), META) == 0
 
 
+class TestPolygonRoi:
+    def test_resolve_returns_polygon_points(self, monkeypatch):
+        from src.core.config import settings
+        poly = [[0.0, 0.0], [1.0, 0.0], [1.0, 0.5], [0.0, 0.5]]
+        monkeypatch.setattr(settings, "camera_rois", {"front": poly})
+        assert resolve_roi("CAM-front") == [(0.0, 0.0), (1.0, 0.0), (1.0, 0.5), (0.0, 0.5)]
+
+    def test_count_inside_polygon(self):
+        # Triangle over the top-left; (100,100)→(0.156,0.156) is inside, the
+        # bottom detection (100,500)→(0.156,0.781) is below the hypotenuse.
+        tri = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)]
+        # Use a clearly-inside top point and a clearly-outside bottom-right point.
+        dets = [_det(50, 50), _det(600, 600)]
+        assert count_in_roi(dets, tri, META) == 1
+
+    def test_validate_flags_too_few_vertices(self):
+        from src.services.roi_service import validate_shape
+        assert validate_shape([[0.0, 0.0], [1.0, 1.0]]) is not None
+
+    def test_validate_flags_degenerate_polygon(self):
+        from src.services.roi_service import validate_shape
+        # Three collinear points → zero area.
+        assert validate_shape([[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]]) is not None
+
+    def test_validate_accepts_good_polygon(self):
+        from src.services.roi_service import validate_shape
+        assert validate_shape([[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]]) is None
+
+    def test_advisory_overlap_uses_bbox(self):
+        # A top polygon and a bottom box whose bounding boxes overlap in y.
+        rois = {"front": [[0.0, 0.0], [1.0, 0.0], [1.0, 0.6], [0.0, 0.6]],
+                "rear": [0.0, 0.4, 1.0, 1.0]}
+        assert any("overlap" in a for a in roi_advisories(rois))
+
+
 class TestGrouperRoiCombining:
     async def _run_process(self, frames, camera_rois, monkeypatch, detections_per_cam=2):
         from src.core.config import settings
