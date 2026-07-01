@@ -19,7 +19,14 @@ import threading
 from pathlib import Path
 
 from ..core.config import settings
-from .roi_service import validate_box
+from .roi_service import _is_polygon, validate_shape
+
+
+def _coerce_shape(shape):
+    """Float-coerce a shape, preserving rectangle vs polygon structure."""
+    if _is_polygon(shape):
+        return [[float(x), float(y)] for x, y in shape]
+    return [float(v) for v in shape]
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +45,12 @@ def _apply_to_settings(rois: dict) -> None:
 
 
 def _sanitize(rois: dict) -> dict:
-    """Drop malformed panes so resolve_roi / the UI never choke on a bad box."""
+    """Drop malformed panes so resolve_roi / the UI never choke on a bad shape."""
     clean = {}
-    for pane, box in rois.items():
-        reason = validate_box(box)
+    for pane, shape in rois.items():
+        reason = validate_shape(shape)
         if reason is None:
-            clean[pane] = [float(v) for v in box]
+            clean[pane] = _coerce_shape(shape)
         else:
             logger.warning("Dropping malformed ROI pane %r from store: %s", pane, reason)
     return clean
@@ -95,22 +102,23 @@ def load(path: Path | None = None) -> dict:
     return seed
 
 
-def set_pane(pane: str, box, path: Path | None = None) -> dict:
+def set_pane(pane: str, shape, path: Path | None = None) -> dict:
     """
-    Validate + persist one pane's ROI box, returning the new effective dict.
+    Validate + persist one pane's ROI shape, returning the new effective dict.
 
-    Raises ValueError (with a human-readable reason) if the box is malformed.
+    Accepts either a rectangle [x1,y1,x2,y2] or a polygon [[x,y],...]. Raises
+    ValueError (with a human-readable reason) if the shape is malformed.
     Read-merge-write happens under the lock so concurrent edits to different
     panes don't clobber each other.
     """
     path = path or ROI_STORE_PATH
-    reason = validate_box(box)
+    reason = validate_shape(shape)
     if reason is not None:
         raise ValueError(reason)
-    box = [float(v) for v in box]
+    shape = _coerce_shape(shape)
     with _lock:
         rois = dict(settings.camera_rois)
-        rois[pane] = box
+        rois[pane] = shape
         _apply_to_settings(rois)
         _atomic_write(rois, path)
         return rois

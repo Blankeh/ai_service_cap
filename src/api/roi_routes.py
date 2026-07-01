@@ -4,15 +4,17 @@ roi_routes.py — interactive ROI calibration editor, mounted at /roi.
 Unlike the dev-only detection viewer (/dev), these routes are available in prod
 too, so you can calibrate ROIs directly on the deployed Pi. They let you:
 
-  * GET  /roi/rois                       — current ROIs + known panes + advisories
-  * PUT  /roi/rois/{pane}                — save one pane's box (validated, persisted)
+  * GET    /roi/rois                     — current ROIs + known panes + advisories
+  * PUT    /roi/rois/{pane}              — save one pane's shape (validated, persisted)
   * DELETE /roi/rois/{pane}              — clear a pane (reverts to full frame)
-  * GET  /roi/snapshot/{device_id}       — latest ORIGINAL frame (editor canvas)
-  * GET  /roi/rois/{pane}/preview?...    — live "heads inside this box" count
-  * GET  /roi/                           — the browser editor (drag box + sliders)
+  * GET    /roi/snapshot/{device_id}     — latest ORIGINAL frame (editor canvas)
+  * POST   /roi/rois/{pane}/preview      — live "heads inside this shape" count
+  * GET    /roi/                         — the browser editor (draw a polygon)
 
-Edits persist to data/camera_rois.json via roi_store and mutate settings in
-place, so resolve_roi picks them up on the next processed group — no restart.
+A shape is either a rectangle [x1,y1,x2,y2] or a freeform polygon [[x,y],...];
+both are accepted everywhere. Edits persist to data/camera_rois.json via
+roi_store and mutate settings in place, so resolve_roi picks them up on the next
+processed group — no restart.
 
 SECURITY: PUT/DELETE write config and are unauthenticated, matching the rest of
 the service (the Pi is expected to sit on a trusted LAN). If that changes, gate
@@ -25,7 +27,12 @@ from fastapi.responses import HTMLResponse, Response
 
 from ..core.config import settings
 from ..services import roi_store
-from ..services.roi_service import _pane_key, count_in_roi, roi_advisories
+from ..services.roi_service import (
+    _pane_key,
+    count_in_roi,
+    roi_advisories,
+    validate_shape,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,13 +66,17 @@ async def get_rois(request: Request):
 
 
 @roi_router.put("/rois/{pane}")
-async def put_roi(pane: str, box: list[float] = Body(..., embed=True)):
+async def put_roi(pane: str, payload: dict = Body(...)):
     pane = _pane_key(pane)
+    # Accept the new "shape" key; fall back to the legacy "box" key.
+    shape = payload.get("shape", payload.get("box"))
+    if shape is None:
+        raise HTTPException(status_code=422, detail="missing 'shape' in body")
     try:
-        rois = roi_store.set_pane(pane, box)
+        rois = roi_store.set_pane(pane, shape)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    logger.info("ROI saved for pane %r: %s", pane, box)
+    logger.info("ROI saved for pane %r: %s", pane, shape)
     return {"ok": True, "rois": rois, "advisories": roi_advisories(rois)}
 
 
@@ -88,15 +99,21 @@ async def snapshot(device_id: str, request: Request):
                     headers={"Cache-Control": "no-store"})
 
 
-@roi_router.get("/rois/{pane}/preview")
-async def preview(pane: str, request: Request,
-                  x1: float, y1: float, x2: float, y2: float, device_id: str):
-    """Count how many of the camera's latest detections fall inside a candidate box."""
+@roi_router.post("/rois/{pane}/preview")
+async def preview(pane: str, request: Request, payload: dict = Body(...)):
+    """Count how many of the camera's latest detections fall inside a candidate shape."""
+    device_id = payload.get("device_id")
+    shape = payload.get("shape")
+    if not device_id or shape is None:
+        return {"count": None}
+    # While the user is mid-draw the shape may be incomplete — don't 500, just skip.
+    if validate_shape(shape) is not None:
+        return {"count": None}
     store = getattr(request.app.state, "snapshot_store", None)
     latest = store.latest(device_id) if store is not None else None
     if latest is None:
         return {"count": None}
-    count = count_in_roi(latest["detections"], (x1, y1, x2, y2), latest["meta"])
+    count = count_in_roi(latest["detections"], shape, latest["meta"])
     return {"count": count, "total": len(latest["detections"])}
 
 
@@ -119,15 +136,16 @@ _EDITOR_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
  .stage img{display:block;width:100%;height:auto}
  .noframe{display:flex;align-items:center;justify-content:center;height:300px;
           color:#888;font-size:13px;text-align:center;padding:0 20px}
- .box{position:absolute;border:2px solid #2af;background:rgba(34,170,255,.16);cursor:move}
- .h{position:absolute;width:12px;height:12px;background:#2af;border:1px solid #04263b}
- .h.nw{left:-7px;top:-7px;cursor:nwse-resize} .h.ne{right:-7px;top:-7px;cursor:nesw-resize}
- .h.sw{left:-7px;bottom:-7px;cursor:nesw-resize} .h.se{right:-7px;bottom:-7px;cursor:nwse-resize}
- .sliders{margin:10px 0;display:grid;grid-template-columns:auto 1fr auto;gap:6px 8px;align-items:center}
- .sliders label{color:#aaa;font-size:12px} .sliders input[type=range]{width:100%}
- .sliders input[type=number]{width:64px;background:#222;color:#eee;border:1px solid #444;border-radius:4px}
- .row{display:flex;gap:8px;align-items:center;margin-top:8px}
+ .ov{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+ .ov polygon{fill:rgba(34,170,255,.16);stroke:#2af;stroke-width:2;
+             vector-effect:non-scaling-stroke;cursor:move}
+ .h{position:absolute;width:13px;height:13px;border-radius:50%;background:#2af;
+    border:1px solid #04263b;transform:translate(-50%,-50%);cursor:grab;touch-action:none}
+ .h:active{cursor:grabbing}
+ .hint{color:#789;font-size:11px;margin:6px 0 2px}
+ .row{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
  button{background:#264;color:#dfd;border:1px solid #4a6;border-radius:5px;padding:6px 12px;cursor:pointer}
+ button.minor{background:#23303a;color:#bdd;border-color:#3a5a6a}
  button.clear{background:#422;color:#fdd;border-color:#a55}
  .count{color:#fd6;font-size:13px;margin-left:auto}
  .msg{font-size:12px;margin-top:6px;min-height:14px}
@@ -135,23 +153,33 @@ _EDITOR_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
  #adv{color:#fc6;font-size:13px;margin:10px 0;min-height:16px}
 </style></head><body>
 <h1>ROI calibration</h1>
-<p class="sub">Drag the box or use the sliders. The count shows how many detected heads fall inside.
-Save writes <code>data/camera_rois.json</code> and applies immediately — no restart.</p>
+<p class="sub">Drag the dots to reshape, drag inside to move the whole region, click
+outside to add a point, double-click a dot to remove it. The count shows how many
+detected heads fall inside. Save writes <code>data/camera_rois.json</code> and
+applies immediately — no restart.</p>
 <div id="adv"></div>
 <div class="cards" id="cards"></div>
 <script>
 const API = location.pathname.replace(/\/$/, "");   // e.g. "/roi"
 const clamp = v => Math.max(0, Math.min(1, v));
 const r3 = v => Math.round(v*1000)/1000;
+const SVGNS = "http://www.w3.org/2000/svg";
+
+// A shape from the server is either a flat [x1,y1,x2,y2] rectangle or a list of
+// [x,y] vertices. Normalize both into an array of {x,y} polygon points.
+function toPoints(shape){
+  if(!Array.isArray(shape) || !shape.length) return defaultQuad();
+  if(Array.isArray(shape[0])) return shape.map(p=>({x:clamp(+p[0]),y:clamp(+p[1])}));
+  const [x1,y1,x2,y2]=shape;                          // legacy rectangle
+  return [{x:x1,y:y1},{x:x2,y:y1},{x:x2,y:y2},{x:x1,y:y2}];
+}
+function defaultQuad(){ return [{x:.25,y:.25},{x:.75,y:.25},{x:.75,y:.75},{x:.25,y:.75}]; }
 
 async function boot(){
   const r = await fetch(API+"/rois"); const j = await r.json();
   renderAdv(j.advisories);
   const cards = document.getElementById("cards"); cards.innerHTML = "";
-  for(const p of j.panes){
-    const box = (j.rois[p.pane]) || [0.25,0.25,0.75,0.75];
-    cards.appendChild(makeCard(p, box));
-  }
+  for(const p of j.panes) cards.appendChild(makeCard(p, j.rois[p.pane]));
   if(j.panes.length===0) cards.innerHTML =
     '<p class="sub">No cameras seen and no ROIs configured yet. Once a camera uploads a frame it appears here.</p>';
 }
@@ -160,90 +188,117 @@ function renderAdv(adv){
   el.textContent = (adv && adv.length) ? "⚠ "+adv.join("  •  ") : "";
 }
 
-function makeCard(p, box){
+function makeCard(p, shape){
   const card = document.createElement("div"); card.className="card";
   card.innerHTML = `
     <p class="pane">${p.pane} <small>${p.device_id || "(no live camera)"}</small></p>
     <div class="stage"></div>
-    <div class="sliders"></div>
+    <div class="hint">drag dot = move corner · drag inside = move region · click outside = add point · dbl-click dot = delete</div>
     <div class="row">
       <button class="save">Save</button>
+      <button class="minor undo">Undo point</button>
+      <button class="minor reset">Reset</button>
       <button class="clear">Clear</button>
       <span class="count"></span>
     </div>
     <div class="msg"></div>`;
   const stage = card.querySelector(".stage");
-  const state = {x1:box[0],y1:box[1],x2:box[2],y2:box[3]};
+  let pts = toPoints(shape);
 
-  // Canvas: snapshot image, or a placeholder when no frame yet.
-  let rect;
+  // Canvas: snapshot image (polled ~1s, matching the new capture cadence), or a
+  // placeholder when no frame yet.
   if(p.device_id){
     const img = document.createElement("img");
     const refresh = ()=> img.src = API+"/snapshot/"+encodeURIComponent(p.device_id)+"?t="+Date.now();
     img.onerror = ()=>{ stage.querySelectorAll("img").forEach(n=>n.remove()); ensurePlaceholder(stage); };
-    refresh(); setInterval(refresh, 3000);
+    refresh(); setInterval(refresh, 1000);
     stage.appendChild(img);
   } else { ensurePlaceholder(stage); }
 
-  const boxEl = document.createElement("div"); boxEl.className="box";
-  for(const c of ["nw","ne","sw","se"]){ const h=document.createElement("div"); h.className="h "+c; h.dataset.c=c; boxEl.appendChild(h); }
-  stage.appendChild(boxEl);
+  // SVG overlay (0..100 user units via the polygon points) + HTML dot handles.
+  const svg = document.createElementNS(SVGNS,"svg");
+  svg.setAttribute("class","ov"); svg.setAttribute("viewBox","0 0 100 100");
+  svg.setAttribute("preserveAspectRatio","none");
+  const poly = document.createElementNS(SVGNS,"polygon"); svg.appendChild(poly);
+  stage.appendChild(svg);
+  const handles = [];
 
-  const sliders = card.querySelector(".sliders");
-  const inputs = {};
-  for(const k of ["x1","y1","x2","y2"]){
-    const lab=document.createElement("label"); lab.textContent=k;
-    const rng=document.createElement("input"); rng.type="range"; rng.min=0; rng.max=1; rng.step=0.001;
-    const num=document.createElement("input"); num.type="number"; num.min=0; num.max=1; num.step=0.001;
-    sliders.append(lab,rng,num);
-    inputs[k]={rng,num};
-    const set = v=>{ state[k]=clamp(parseFloat(v)||0); normalize(); sync(); preview(); };
-    rng.addEventListener("input",e=>set(e.target.value));
-    num.addEventListener("input",e=>set(e.target.value));
-  }
-
-  function normalize(){ // keep x1<x2, y1<y2
-    if(state.x1>state.x2){[state.x1,state.x2]=[state.x2,state.x1];}
-    if(state.y1>state.y2){[state.y1,state.y2]=[state.y2,state.y1];}
-  }
-  function sync(){
-    boxEl.style.left  =(state.x1*100)+"%"; boxEl.style.top   =(state.y1*100)+"%";
-    boxEl.style.width =((state.x2-state.x1)*100)+"%"; boxEl.style.height=((state.y2-state.y1)*100)+"%";
-    for(const k of ["x1","y1","x2","y2"]){ inputs[k].rng.value=state[k]; inputs[k].num.value=r3(state[k]); }
-  }
-
-  // Drag-to-move and corner resize via pointer events.
-  let drag=null;
   const toNorm = e=>{ const b=stage.getBoundingClientRect();
     return {x:clamp((e.clientX-b.left)/b.width), y:clamp((e.clientY-b.top)/b.height)}; };
-  boxEl.addEventListener("pointerdown",e=>{
-    if(e.target.classList.contains("h")) drag={mode:"resize",c:e.target.dataset.c};
-    else { const n=toNorm(e); drag={mode:"move",ox:n.x-state.x1,oy:n.y-state.y1,w:state.x2-state.x1,h:state.y2-state.y1}; }
-    boxEl.setPointerCapture(e.pointerId); e.preventDefault();
-  });
-  boxEl.addEventListener("pointermove",e=>{
-    if(!drag) return; const n=toNorm(e);
-    if(drag.mode==="move"){
-      let nx1=clamp(n.x-drag.ox), ny1=clamp(n.y-drag.oy);
-      nx1=Math.min(nx1,1-drag.w); ny1=Math.min(ny1,1-drag.h);
-      state.x1=nx1; state.y1=ny1; state.x2=nx1+drag.w; state.y2=ny1+drag.h;
-    } else {
-      if(drag.c.includes("w")) state.x1=n.x; if(drag.c.includes("e")) state.x2=n.x;
-      if(drag.c.includes("n")) state.y1=n.y; if(drag.c.includes("s")) state.y2=n.y;
-      normalize();
+
+  function render(){
+    poly.setAttribute("points", pts.map(p=>`${p.x*100},${p.y*100}`).join(" "));
+    while(handles.length>pts.length){ handles.pop().remove(); }
+    while(handles.length<pts.length){
+      const h=document.createElement("div"); h.className="h"; stage.appendChild(h);
+      bindHandle(h); handles.push(h);
     }
-    sync(); preview();
+    // Position dots and re-stamp dataset.i — indices shift after add/delete.
+    pts.forEach((pt,i)=>{ handles[i].style.left=(pt.x*100)+"%";
+      handles[i].style.top=(pt.y*100)+"%"; handles[i].dataset.i=i; });
+  }
+
+  // Vertex drag + double-click delete. The live index is read from dataset.i
+  // (kept current by render) so splices elsewhere don't desync this handle.
+  function bindHandle(h){
+    h.addEventListener("pointerdown", e=>{
+      const i = +h.dataset.i;
+      h.setPointerCapture(e.pointerId);
+      const move = ev=>{ const n=toNorm(ev); pts[i]={x:n.x,y:n.y}; render(); };
+      const up = ()=>{ h.removeEventListener("pointermove",move);
+                       h.removeEventListener("pointerup",up); preview(); };
+      h.addEventListener("pointermove",move); h.addEventListener("pointerup",up);
+      e.stopPropagation(); e.preventDefault();
+    });
+    h.addEventListener("dblclick", e=>{
+      const i = +h.dataset.i;
+      if(pts.length>3){ pts.splice(i,1); render(); preview(); }
+      e.stopPropagation();
+    });
+  }
+
+  // Drag the whole polygon.
+  poly.addEventListener("pointerdown", e=>{
+    const start=toNorm(e); const orig=pts.map(p=>({...p}));
+    poly.setPointerCapture(e.pointerId);
+    const move = ev=>{ const n=toNorm(ev); const dx=n.x-start.x, dy=n.y-start.y;
+      pts = orig.map(p=>({x:clamp(p.x+dx), y:clamp(p.y+dy)})); render(); };
+    const up = ()=>{ poly.removeEventListener("pointermove",move);
+                     poly.removeEventListener("pointerup",up); preview(); };
+    poly.addEventListener("pointermove",move); poly.addEventListener("pointerup",up);
+    e.preventDefault();
   });
-  boxEl.addEventListener("pointerup",e=>{ drag=null; });
+
+  // Click on empty canvas → insert a point on the nearest edge.
+  stage.addEventListener("pointerdown", e=>{
+    if(e.target!==stage && e.target.tagName!=="IMG" && e.target!==svg) return;
+    const n=toNorm(e); insertOnNearestEdge(n); render(); preview();
+  });
+  function insertOnNearestEdge(n){
+    let best=0, bestD=Infinity;
+    for(let i=0;i<pts.length;i++){
+      const a=pts[i], b=pts[(i+1)%pts.length];
+      const d=segDist(n,a,b); if(d<bestD){bestD=d; best=i;}
+    }
+    pts.splice(best+1,0,{x:n.x,y:n.y});
+  }
+  function segDist(p,a,b){
+    const dx=b.x-a.x, dy=b.y-a.y; const l2=dx*dx+dy*dy;
+    let t = l2 ? ((p.x-a.x)*dx+(p.y-a.y)*dy)/l2 : 0; t=Math.max(0,Math.min(1,t));
+    const cx=a.x+t*dx, cy=a.y+t*dy; return Math.hypot(p.x-cx,p.y-cy);
+  }
 
   // Debounced live count preview.
   let t=null; const countEl=card.querySelector(".count");
   function preview(){
     if(!p.device_id){ countEl.textContent=""; return; }
     clearTimeout(t); t=setTimeout(async()=>{
-      const q=`x1=${state.x1}&y1=${state.y1}&x2=${state.x2}&y2=${state.y2}&device_id=${encodeURIComponent(p.device_id)}`;
-      try{ const r=await fetch(`${API}/rois/${encodeURIComponent(p.pane)}/preview?`+q); const j=await r.json();
-        countEl.textContent = (j.count==null) ? "no frame yet" : `${j.count} / ${j.total} heads in box`;
+      try{
+        const r=await fetch(`${API}/rois/${encodeURIComponent(p.pane)}/preview`,{method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({device_id:p.device_id, shape:pts.map(p=>[p.x,p.y])})});
+        const j=await r.json();
+        countEl.textContent = (j.count==null) ? "no frame yet" : `${j.count} / ${j.total} heads in shape`;
       }catch(_){}
     },180);
   }
@@ -252,10 +307,16 @@ function makeCard(p, box){
   card.querySelector(".save").addEventListener("click",async()=>{
     const r=await fetch(`${API}/rois/${encodeURIComponent(p.pane)}`,{method:"PUT",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({box:[r3(state.x1),r3(state.y1),r3(state.x2),r3(state.y2)]})});
+      body:JSON.stringify({shape:pts.map(p=>[r3(p.x),r3(p.y)])})});
     const j=await r.json();
     if(r.ok){ msg.className="msg ok"; msg.textContent="Saved."; renderAdv(j.advisories); }
-    else   { msg.className="msg err"; msg.textContent="Rejected: "+(j.detail||"invalid box"); }
+    else   { msg.className="msg err"; msg.textContent="Rejected: "+(j.detail||"invalid shape"); }
+  });
+  card.querySelector(".undo").addEventListener("click",()=>{
+    if(pts.length>3){ pts.pop(); render(); preview(); }
+  });
+  card.querySelector(".reset").addEventListener("click",()=>{
+    pts=defaultQuad(); render(); preview();
   });
   card.querySelector(".clear").addEventListener("click",async()=>{
     const r=await fetch(`${API}/rois/${encodeURIComponent(p.pane)}`,{method:"DELETE"});
@@ -263,13 +324,13 @@ function makeCard(p, box){
     renderAdv(j.advisories);
   });
 
-  sync(); preview();
+  render(); preview();
   return card;
 }
 function ensurePlaceholder(stage){
   if(stage.querySelector(".noframe")) return;
   const ph=document.createElement("div"); ph.className="noframe";
-  ph.textContent="Waiting for first frame from this camera — you can still set the box numerically.";
+  ph.textContent="Waiting for first frame from this camera — you can still set the region.";
   stage.insertBefore(ph, stage.firstChild);
 }
 boot();

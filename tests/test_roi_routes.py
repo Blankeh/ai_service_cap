@@ -77,6 +77,24 @@ class TestPutRoi:
         r = client.put("/roi/rois/rear", json={"box": [0.0, 0.4, 1.0, 1.0]})
         assert any("overlap" in a for a in r.json()["advisories"])
 
+    def test_valid_polygon_persists(self, client, tmp_path):
+        poly = [[0.0, 0.0], [1.0, 0.0], [1.0, 0.5], [0.0, 0.5]]
+        r = client.put("/roi/rois/front", json={"shape": poly})
+        assert r.status_code == 200
+        assert r.json()["rois"]["front"] == poly
+        on_disk = json.loads((tmp_path / "camera_rois.json").read_text())
+        assert on_disk["front"] == poly
+
+    def test_invalid_polygon_422(self, client):
+        # Only 2 vertices — not a polygon.
+        r = client.put("/roi/rois/front", json={"shape": [[0.0, 0.0], [1.0, 1.0]]})
+        assert r.status_code == 422
+        assert "front" not in settings.camera_rois
+
+    def test_missing_shape_422(self, client):
+        r = client.put("/roi/rois/front", json={})
+        assert r.status_code == 422
+
 
 class TestDeleteRoi:
     def test_delete_removes_pane(self, client):
@@ -99,16 +117,27 @@ class TestSnapshot:
 class TestPreview:
     def test_counts_heads_in_box(self, client):
         # Top-half box catches 1 of the 2 detections.
-        r = client.get("/roi/rois/front/preview",
-                       params={"x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 0.5,
-                               "device_id": "CAM-front"})
+        r = client.post("/roi/rois/front/preview",
+                        json={"shape": [0.0, 0.0, 1.0, 0.5], "device_id": "CAM-front"})
+        assert r.json() == {"count": 1, "total": 2}
+
+    def test_counts_heads_in_polygon(self, client):
+        # Same top-half region as a 4-vertex polygon — exercises point-in-polygon.
+        r = client.post("/roi/rois/front/preview",
+                        json={"shape": [[0.0, 0.0], [1.0, 0.0], [1.0, 0.5], [0.0, 0.5]],
+                              "device_id": "CAM-front"})
         assert r.json() == {"count": 1, "total": 2}
 
     def test_null_when_no_frame(self, client):
-        r = client.get("/roi/rois/rear/preview",
-                       params={"x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 1.0,
-                               "device_id": "CAM-rear"})
+        r = client.post("/roi/rois/rear/preview",
+                        json={"shape": [0.0, 0.0, 1.0, 1.0], "device_id": "CAM-rear"})
         assert r.json()["count"] is None
+
+    def test_null_when_shape_incomplete(self, client):
+        # Mid-draw 2-vertex shape must not 500 — just no count.
+        r = client.post("/roi/rois/front/preview",
+                        json={"shape": [[0.0, 0.0], [1.0, 1.0]], "device_id": "CAM-front"})
+        assert r.status_code == 200 and r.json()["count"] is None
 
 
 def test_editor_page_served(client):
