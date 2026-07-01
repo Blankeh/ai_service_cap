@@ -160,8 +160,7 @@ _EDITOR_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
  .h:active{cursor:grabbing}
  .dets{pointer-events:none}
  .dets rect{fill:none;stroke-width:1.5;vector-effect:non-scaling-stroke}
- .dets circle{r:1.6}
- .dets .in{stroke:#4f8;fill:#4f8} .dets .out{stroke:#888;fill:#888}
+ .dets .in{stroke:#4f8} .dets .out{stroke:#888}
  .detlabels{position:absolute;inset:0;pointer-events:none;overflow:hidden}
  .detlabels span{position:absolute;font-size:10px;line-height:1;white-space:nowrap;
    transform:translateY(-2px);text-shadow:0 0 2px #000,0 0 2px #000}
@@ -283,8 +282,9 @@ function makeCard(p, shape){
     }
     return inside;
   }
-  // Draw each detection: box edges + center dot + a confidence label, colored by
-  // whether its center is inside the current ROI (counted). pts is always a polygon.
+  // Draw each detection as box EDGES only (no fill/dot, so the head underneath is
+  // visible) + a confidence label, colored by whether its center is inside the
+  // current ROI (counted). pts is always a polygon in the editor.
   function drawDetections(){
     detG.textContent = ""; detLabels.textContent = "";
     for(const d of dets){
@@ -293,9 +293,7 @@ function makeCard(p, shape){
       const rect=document.createElementNS(SVGNS,"rect"); rect.setAttribute("class",cls);
       rect.setAttribute("x",x1*100); rect.setAttribute("y",y1*100);
       rect.setAttribute("width",(x2-x1)*100); rect.setAttribute("height",(y2-y1)*100);
-      const dot=document.createElementNS(SVGNS,"circle"); dot.setAttribute("class",cls);
-      dot.setAttribute("cx",d.cx*100); dot.setAttribute("cy",d.cy*100);
-      detG.appendChild(rect); detG.appendChild(dot);
+      detG.appendChild(rect);
       if(d.confidence!=null){
         const lab=document.createElement("span"); lab.className=cls;
         lab.textContent=d.confidence.toFixed(2);
