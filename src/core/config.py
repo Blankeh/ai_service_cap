@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     model_path: str = os.getenv("MODEL_PATH", "yolov8n.pt")
     yolo_input_size: int = int(os.getenv("YOLO_INPUT_SIZE", "640"))
     confidence_threshold: float = float(os.getenv("CONFIDENCE_THRESHOLD", "0.35"))
+    # NMS IoU threshold. Ultralytics' 0.7 default is loose and lets duplicate boxes
+    # on one head survive (over-counting); 0.45 merges them. Lower = more merging.
+    nms_iou_threshold: float = float(os.getenv("NMS_IOU_THRESHOLD", "0.45"))
 
     # Cloudflare backend
     cloudflare_api_url: str = os.getenv("CLOUDFLARE_API_URL", "")

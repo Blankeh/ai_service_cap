@@ -31,6 +31,7 @@ async def lifespan(app: FastAPI):
     inference_svc = InferenceService(
         model_path=settings.model_path,
         confidence_threshold=settings.confidence_threshold,
+        iou_threshold=settings.nms_iou_threshold,
     )
     # Device auth — only when a backend URL is configured (empty URL = dummy mode,
     # nothing to log in to). The login loop keeps requesting a token at startup.
