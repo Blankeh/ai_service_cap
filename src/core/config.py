@@ -84,6 +84,11 @@ class Settings(BaseSettings):
     def _decode_camera_rois(cls, v) -> dict:
         return _parse_camera_rois(v)
 
+    # How often (seconds) to re-sync ROIs from data/camera_rois.json so out-of-band
+    # edits (hand-edited file / another worker) apply without a restart. In-process
+    # editor saves are already live immediately. 0 disables the periodic reload.
+    roi_reload_interval_seconds: int = int(os.getenv("ROI_RELOAD_INTERVAL_SECONDS", "30"))
+
     # UDP broadcast camera-sync
     camera_sync_enabled: bool = os.getenv("CAMERA_SYNC_ENABLED", "true").lower() == "true"
     camera_sync_broadcast_addr: str = os.getenv("CAMERA_SYNC_BROADCAST_ADDR", "255.255.255.255")

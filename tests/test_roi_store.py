@@ -104,3 +104,38 @@ class TestSetDeletePane:
         on_disk = json.loads(store_path.read_text())
         assert set(on_disk) == set(panes)
         assert set(settings.camera_rois) == set(panes)
+
+
+class TestReloadFromDisk:
+    def test_picks_up_external_edit(self, store_path):
+        roi_store.load(store_path)  # seeds empty file
+        # Simulate a hand-edit / another worker writing the file directly.
+        store_path.write_text(json.dumps({"front": [0.0, 0.0, 1.0, 0.5]}))
+        assert roi_store.reload_from_disk(store_path) is True
+        assert settings.camera_rois == {"front": [0.0, 0.0, 1.0, 0.5]}
+
+    def test_no_change_returns_false(self, store_path):
+        roi_store.set_pane("front", [0.0, 0.0, 1.0, 0.5], store_path)
+        # File and memory already agree — reload is a no-op.
+        assert roi_store.reload_from_disk(store_path) is False
+        assert settings.camera_rois == {"front": [0.0, 0.0, 1.0, 0.5]}
+
+    def test_missing_file_is_noop(self, store_path):
+        settings.camera_rois.update({"front": [0.0, 0.0, 1.0, 0.5]})
+        assert roi_store.reload_from_disk(store_path) is False
+        assert settings.camera_rois == {"front": [0.0, 0.0, 1.0, 0.5]}
+
+    def test_corrupt_file_keeps_memory(self, store_path):
+        roi_store.set_pane("front", [0.0, 0.0, 1.0, 0.5], store_path)
+        store_path.write_text("{ not json ]")
+        assert roi_store.reload_from_disk(store_path) is False
+        assert settings.camera_rois == {"front": [0.0, 0.0, 1.0, 0.5]}
+
+    def test_malformed_pane_dropped_on_reload(self, store_path):
+        roi_store.load(store_path)
+        store_path.write_text(json.dumps({
+            "good": [0.0, 0.0, 1.0, 0.5],
+            "bad":  [0.5, 0.0, 0.4, 1.0],   # x1 > x2
+        }))
+        assert roi_store.reload_from_disk(store_path) is True
+        assert set(settings.camera_rois) == {"good"}

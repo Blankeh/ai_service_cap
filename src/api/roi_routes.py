@@ -30,6 +30,7 @@ from ..services import roi_store
 from ..services.roi_service import (
     _pane_key,
     count_in_roi,
+    map_detection,
     roi_advisories,
     validate_shape,
 )
@@ -117,6 +118,21 @@ async def preview(pane: str, request: Request, payload: dict = Body(...)):
     return {"count": count, "total": len(latest["detections"])}
 
 
+@roi_router.get("/detections/{device_id}")
+async def detections(device_id: str, request: Request):
+    """Latest YOLO detections mapped into original-frame 0..1 coords, for the
+    editor overlay. Returns {"detections": [...]} — empty when no frame yet (the
+    editor polls this continuously, so never 404)."""
+    store = getattr(request.app.state, "snapshot_store", None)
+    latest = store.latest(device_id) if store is not None else None
+    if latest is None:
+        return {"detections": []}
+    meta = latest["meta"]
+    mapped = [m for det in latest["detections"]
+              if (m := map_detection(det, meta)) is not None]
+    return {"detections": mapped}
+
+
 @roi_router.get("/", response_class=HTMLResponse)
 async def editor() -> str:
     return _EDITOR_HTML
@@ -142,6 +158,10 @@ _EDITOR_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
  .h{position:absolute;width:13px;height:13px;border-radius:50%;background:#2af;
     border:1px solid #04263b;transform:translate(-50%,-50%);cursor:grab;touch-action:none}
  .h:active{cursor:grabbing}
+ .dets{pointer-events:none}
+ .dets rect{fill:none;stroke-width:1.5;vector-effect:non-scaling-stroke}
+ .dets circle{r:1.6}
+ .dets .in{stroke:#4f8;fill:#4f8} .dets .out{stroke:#888;fill:#888}
  .hint{color:#789;font-size:11px;margin:6px 0 2px}
  .row{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
  button{background:#264;color:#dfd;border:1px solid #4a6;border-radius:5px;padding:6px 12px;cursor:pointer}
@@ -209,7 +229,8 @@ function makeCard(p, shape){
   // placeholder when no frame yet.
   if(p.device_id){
     const img = document.createElement("img");
-    const refresh = ()=> img.src = API+"/snapshot/"+encodeURIComponent(p.device_id)+"?t="+Date.now();
+    const refresh = ()=>{ img.src = API+"/snapshot/"+encodeURIComponent(p.device_id)+"?t="+Date.now();
+                          fetchDetections(); };
     img.onerror = ()=>{ stage.querySelectorAll("img").forEach(n=>n.remove()); ensurePlaceholder(stage); };
     refresh(); setInterval(refresh, 1000);
     stage.appendChild(img);
@@ -220,6 +241,11 @@ function makeCard(p, shape){
   svg.setAttribute("class","ov"); svg.setAttribute("viewBox","0 0 100 100");
   svg.setAttribute("preserveAspectRatio","none");
   const poly = document.createElementNS(SVGNS,"polygon"); svg.appendChild(poly);
+  // Detection overlay group, drawn after the polygon so boxes/dots sit on top of
+  // the translucent ROI fill. pointer-events:none — purely visual, never blocks drag.
+  const detG = document.createElementNS(SVGNS,"g"); detG.setAttribute("class","dets");
+  svg.appendChild(detG);
+  let dets = [];   // latest mapped detections {box:[nx1,ny1,nx2,ny2], cx, cy}
   stage.appendChild(svg);
   const handles = [];
 
@@ -236,6 +262,39 @@ function makeCard(p, shape){
     // Position dots and re-stamp dataset.i — indices shift after add/delete.
     pts.forEach((pt,i)=>{ handles[i].style.left=(pt.x*100)+"%";
       handles[i].style.top=(pt.y*100)+"%"; handles[i].dataset.i=i; });
+    drawDetections();   // recolor in/out live as the ROI is reshaped
+  }
+
+  // Ray-casting point-in-polygon (mirrors roi_service._point_in_polygon) so a
+  // detection's green/gray matches what the server would count.
+  function pointInPoly(x,y,poly){
+    let inside=false;
+    for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+      const xi=poly[i].x, yi=poly[i].y, xj=poly[j].x, yj=poly[j].y;
+      if(((yi>y)!==(yj>y)) && (x < (xj-xi)*(y-yi)/(yj-yi)+xi)) inside=!inside;
+    }
+    return inside;
+  }
+  // Draw each detection box + center dot, colored by whether its center is inside
+  // the current ROI (counted) — pts is always a polygon in the editor.
+  function drawDetections(){
+    detG.textContent = "";
+    for(const d of dets){
+      const [x1,y1,x2,y2]=d.box;
+      const cls = pointInPoly(d.cx,d.cy,pts) ? "in" : "out";
+      const rect=document.createElementNS(SVGNS,"rect"); rect.setAttribute("class",cls);
+      rect.setAttribute("x",x1*100); rect.setAttribute("y",y1*100);
+      rect.setAttribute("width",(x2-x1)*100); rect.setAttribute("height",(y2-y1)*100);
+      const dot=document.createElementNS(SVGNS,"circle"); dot.setAttribute("class",cls);
+      dot.setAttribute("cx",d.cx*100); dot.setAttribute("cy",d.cy*100);
+      detG.appendChild(rect); detG.appendChild(dot);
+    }
+  }
+  async function fetchDetections(){
+    if(!p.device_id) return;
+    try{ const r=await fetch(API+"/detections/"+encodeURIComponent(p.device_id));
+      const j=await r.json(); dets=j.detections||[]; drawDetections();
+    }catch(_){}
   }
 
   // Vertex drag + double-click delete. The live index is read from dataset.i

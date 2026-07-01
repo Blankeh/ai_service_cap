@@ -109,6 +109,12 @@ async def lifespan(app: FastAPI):
     )
     aggregator_task = asyncio.create_task(aggregator_svc.run_loop())
     camera_sync_task = asyncio.create_task(camera_sync_svc.run_loop())
+    # Periodically re-sync ROIs from disk so out-of-band edits apply without a
+    # restart (editor saves are already live in-process). 0 disables it.
+    roi_reload_task = (
+        asyncio.create_task(roi_store.run_reload_loop(settings.roi_reload_interval_seconds))
+        if settings.roi_reload_interval_seconds > 0 else None
+    )
 
     logger.info("AI service started")
     yield
@@ -118,6 +124,8 @@ async def lifespan(app: FastAPI):
         auth_login_task.cancel()
     aggregator_task.cancel()
     camera_sync_task.cancel()
+    if roi_reload_task is not None:
+        roi_reload_task.cancel()
     logger.info("AI service stopped")
 
 

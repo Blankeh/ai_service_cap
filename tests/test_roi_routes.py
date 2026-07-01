@@ -140,6 +140,23 @@ class TestPreview:
         assert r.status_code == 200 and r.json()["count"] is None
 
 
+class TestDetections:
+    def test_returns_mapped_detections(self, client):
+        # Fixture seeds CAM-front with dets at (100,100) and (100,500); META is a
+        # no-padding 640² letterbox so normalized center = pixel / 640.
+        j = client.get("/roi/detections/CAM-front").json()
+        assert len(j["detections"]) == 2
+        cys = sorted(d["cy"] for d in j["detections"])
+        assert cys[0] == pytest.approx(100 / 640)   # top-half detection
+        assert cys[1] == pytest.approx(500 / 640)   # bottom-half detection
+        assert j["detections"][0]["box"] == pytest.approx(
+            [95 / 640, 95 / 640, 105 / 640, 105 / 640]
+        )
+
+    def test_empty_when_no_frame(self, client):
+        assert client.get("/roi/detections/CAM-rear").json() == {"detections": []}
+
+
 def test_editor_page_served(client):
     r = client.get("/roi/")
     assert r.status_code == 200 and "ROI calibration" in r.text

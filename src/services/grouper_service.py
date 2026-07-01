@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
-from .roi_service import count_in_roi, resolve_roi
+from .roi_service import FULL_FRAME, count_in_roi, resolve_roi
 
 logger = logging.getLogger(__name__)
 
@@ -207,9 +207,12 @@ class FrameGrouper:
                         device_id, frame.raw_bytes, result["detections"], meta
                     )
                 if self.dev_viewer is not None:
-                    # bbox coords are in `enhanced`'s 640×640 letterboxed space
+                    # bbox coords are in `enhanced`'s 640×640 letterboxed space.
+                    # Pass the ROI (unless full frame) so it's drawn and counted
+                    # detections are colored; None keeps the plain all-green view.
                     await self.dev_viewer.update(
-                        device_id, enhanced, result["detections"], count
+                        device_id, enhanced, result["detections"], count,
+                        roi=None if roi == FULL_FRAME else roi, meta=meta,
                     )
             except Exception as exc:
                 logger.warning(

@@ -6,8 +6,11 @@ import pytest
 from src.services.roi_service import (
     FULL_FRAME,
     count_in_roi,
+    map_detection,
+    point_in_roi,
     resolve_roi,
     roi_advisories,
+    roi_to_pixels,
     validate_box,
     validate_rois,
 )
@@ -168,6 +171,51 @@ class TestPolygonRoi:
         rois = {"front": [[0.0, 0.0], [1.0, 0.0], [1.0, 0.6], [0.0, 0.6]],
                 "rear": [0.0, 0.4, 1.0, 1.0]}
         assert any("overlap" in a for a in roi_advisories(rois))
+
+
+class TestMapDetection:
+    def test_maps_bbox_and_center(self):
+        # bbox [95,95,105,105] center (100,100) → normalized 100/640 = 0.15625
+        m = map_detection(_det(100, 100), META)
+        assert m["box"] == pytest.approx([95 / 640, 95 / 640, 105 / 640, 105 / 640])
+        assert m["cx"] == pytest.approx(0.15625)
+        assert m["cy"] == pytest.approx(0.15625)
+        assert m["class"] == "person"
+        assert m["confidence"] == pytest.approx(0.9)
+
+    def test_respects_letterbox_padding(self):
+        # 100px of top padding, content 640×440 → center y (300) maps to (300-100)/440
+        meta = {"pad_left": 0, "pad_top": 100, "new_w": 640, "new_h": 440, "scale": 1.0}
+        m = map_detection(_det(320, 300), meta)
+        assert m["cx"] == pytest.approx(320 / 640)
+        assert m["cy"] == pytest.approx((300 - 100) / 440)
+
+    def test_degenerate_meta_returns_none(self):
+        assert map_detection(_det(100, 100), {**META, "new_w": 0}) is None
+
+
+class TestPointInRoi:
+    def test_box_inside_and_outside(self):
+        box = (0.0, 0.0, 1.0, 0.5)
+        assert point_in_roi(0.5, 0.25, box) is True
+        assert point_in_roi(0.5, 0.75, box) is False
+
+    def test_polygon_inside_and_outside(self):
+        tri = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)]
+        assert point_in_roi(0.1, 0.1, tri) is True
+        assert point_in_roi(0.9, 0.9, tri) is False
+
+
+class TestRoiToPixels:
+    def test_box_expands_to_four_corners(self):
+        # Top-half box in a no-padding 640² frame → the four corner pixels.
+        assert roi_to_pixels((0.0, 0.0, 1.0, 0.5), META) == [
+            (0, 0), (640, 0), (640, 320), (0, 320),
+        ]
+
+    def test_polygon_maps_each_vertex(self):
+        poly = [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]]
+        assert roi_to_pixels(poly, META) == [(0, 0), (640, 0), (320, 640)]
 
 
 class TestGrouperRoiCombining:

@@ -12,6 +12,7 @@ survive restarts, so the runtime source of truth is a JSON sidecar
 resolve_roi() reads settings.camera_rois fresh each frame, so edits made through
 set_pane/delete_pane take effect on the next processed group with no restart.
 """
+import asyncio
 import json
 import logging
 import os
@@ -133,3 +134,42 @@ def delete_pane(pane: str, path: Path | None = None) -> dict:
         _apply_to_settings(rois)
         _atomic_write(rois, path)
         return rois
+
+
+def reload_from_disk(path: Path | None = None) -> bool:
+    """
+    Re-sync settings.camera_rois from the on-disk store; return True if it changed.
+
+    In-process edits via set_pane/delete_pane are already live (they mutate settings
+    in place), so this only matters for edits made *outside* the API — the file
+    hand-edited on disk, or written by another worker process. The file is read
+    under the lock so this can't clobber a concurrent set_pane. A corrupt or missing
+    file is a no-op (startup load() already logged corruption).
+    """
+    path = path or ROI_STORE_PATH
+    with _lock:
+        if not path.exists():
+            return False
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                raise ValueError(f"expected a JSON object, got {type(raw).__name__}")
+        except (json.JSONDecodeError, ValueError, OSError):
+            return False
+        clean = _sanitize(raw)
+        if clean == dict(settings.camera_rois):
+            return False
+        _apply_to_settings(clean)
+    logger.info("Reloaded ROIs from %s (changed on disk): %s", path, sorted(clean))
+    return True
+
+
+async def run_reload_loop(interval_seconds: float, path: Path | None = None) -> None:
+    """Periodically call reload_from_disk so out-of-band edits apply without a
+    restart. Started from the app lifespan; cancelled on shutdown."""
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            reload_from_disk(path)
+        except Exception:
+            logger.exception("ROI periodic reload failed — will retry next tick")
