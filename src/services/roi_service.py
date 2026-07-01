@@ -208,6 +208,71 @@ def roi_advisories(rois: dict) -> list[str]:
     return advisories
 
 
+def point_in_roi(nx: float, ny: float, roi) -> bool:
+    """
+    True if the normalized point (nx, ny) lies inside `roi`.
+
+    Unifies the two shape formats — a rectangle (x1,y1,x2,y2) uses a simple range
+    test, a polygon (list of (x,y) vertices) uses ray casting. Shared by
+    count_in_roi (the count), the editor dot colors, and the dev-viewer box
+    colors so all three agree by construction.
+    """
+    if _is_polygon(roi):
+        return _point_in_polygon(nx, ny, roi)
+    rx1, ry1, rx2, ry2 = roi
+    return rx1 <= nx <= rx2 and ry1 <= ny <= ry2
+
+
+def map_detection(det: dict, meta: dict) -> dict | None:
+    """
+    Map a detection's bbox from letterboxed inference space to original-frame
+    normalized 0..1 coords, for overlaying on the ROI editor canvas.
+
+    Returns {"box": [nx1,ny1,nx2,ny2], "cx", "cy", "class", "confidence"} or
+    None when meta is degenerate (new_w/new_h <= 0). Coords are intentionally not
+    clamped: a detection straddling the frame edge maps partly outside 0..1 and
+    the SVG clips it; the center still drives the in/out (counted) decision.
+    """
+    new_w = meta["new_w"]
+    new_h = meta["new_h"]
+    if new_w <= 0 or new_h <= 0:
+        return None
+    pad_left = meta["pad_left"]
+    pad_top  = meta["pad_top"]
+    x1, y1, x2, y2 = det["bbox"]
+    nx1 = (x1 - pad_left) / new_w
+    ny1 = (y1 - pad_top) / new_h
+    nx2 = (x2 - pad_left) / new_w
+    ny2 = (y2 - pad_top) / new_h
+    return {
+        "box": [nx1, ny1, nx2, ny2],
+        "cx": (nx1 + nx2) / 2,
+        "cy": (ny1 + ny2) / 2,
+        "class": det.get("class"),
+        "confidence": det.get("confidence"),
+    }
+
+
+def roi_to_pixels(roi, meta: dict) -> list[tuple[int, int]]:
+    """
+    Turn an ROI (box or polygon) into pixel vertices in the letterboxed frame.
+
+    Inverse of map_detection's per-coordinate map: px = nx*new_w + pad_left,
+    py = ny*new_h + pad_top. A rectangle expands to its 4 corners. Used to draw
+    the ROI outline on the dev viewer, whose canvas is the letterboxed frame.
+    """
+    pad_left = meta["pad_left"]
+    pad_top  = meta["pad_top"]
+    new_w    = meta["new_w"]
+    new_h    = meta["new_h"]
+    if _is_polygon(roi):
+        verts = [(float(x), float(y)) for x, y in roi]
+    else:
+        rx1, ry1, rx2, ry2 = roi
+        verts = [(rx1, ry1), (rx2, ry1), (rx2, ry2), (rx1, ry2)]
+    return [(int(nx * new_w + pad_left), int(ny * new_h + pad_top)) for nx, ny in verts]
+
+
 def count_in_roi(detections: list[dict], roi, meta: dict) -> int:
     """
     Count detections whose center falls inside `roi`.
@@ -227,10 +292,6 @@ def count_in_roi(detections: list[dict], roi, meta: dict) -> int:
     if new_w <= 0 or new_h <= 0:
         return len(detections)
 
-    is_poly = _is_polygon(roi)
-    if not is_poly:
-        rx1, ry1, rx2, ry2 = roi
-
     count = 0
     for det in detections:
         x1, y1, x2, y2 = det["bbox"]
@@ -238,9 +299,6 @@ def count_in_roi(detections: list[dict], roi, meta: dict) -> int:
         cy = (y1 + y2) / 2
         nx = (cx - pad_left) / new_w
         ny = (cy - pad_top) / new_h
-        if is_poly:
-            if _point_in_polygon(nx, ny, roi):
-                count += 1
-        elif rx1 <= nx <= rx2 and ry1 <= ny <= ry2:
+        if point_in_roi(nx, ny, roi):
             count += 1
     return count

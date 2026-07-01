@@ -19,6 +19,8 @@ import time
 import cv2
 import numpy as np
 
+from .roi_service import map_detection, point_in_roi, roi_to_pixels
+
 logger = logging.getLogger(__name__)
 
 # Cap the MJPEG output rate. Pushing parts back-to-back faster than the browser
@@ -43,9 +45,16 @@ class DevViewer:
         img: np.ndarray,
         detections: list[dict],
         count: int,
+        roi=None,
+        meta: dict | None = None,
     ) -> None:
-        """Annotate `img` with detection boxes and publish it to subscribers."""
-        frame = self._annotate(img, detections, device_id, count)
+        """Annotate `img` with detection boxes and publish it to subscribers.
+
+        When `roi`+`meta` are given the ROI region is outlined and each detection
+        box is colored by whether it's counted (center inside the ROI), so a saved
+        ROI is visible on the next frame.
+        """
+        frame = self._annotate(img, detections, device_id, count, roi, meta)
         ok, buf = cv2.imencode(".jpg", frame)
         if not ok:
             logger.warning("[DevViewer] failed to JPEG-encode frame for %s", device_id)
@@ -90,16 +99,28 @@ class DevViewer:
 
     @staticmethod
     def _annotate(
-        img: np.ndarray, detections: list[dict], device_id: str, count: int
+        img: np.ndarray, detections: list[dict], device_id: str, count: int,
+        roi=None, meta: dict | None = None,
     ) -> np.ndarray:
         canvas = img.copy()
+        # Draw the ROI outline (cyan) mapped into this letterboxed frame's space.
+        if roi is not None and meta is not None:
+            pts = np.array(roi_to_pixels(roi, meta), np.int32)
+            cv2.polylines(canvas, [pts], True, (0, 255, 255), 2)
         for det in detections:
             x1, y1, x2, y2 = det["bbox"]
-            cv2.rectangle(canvas, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            # Green when the detection's center is inside the ROI (counted), dim
+            # red when outside. No ROI → everything green (unchanged behavior).
+            color = (0, 255, 0)
+            if roi is not None and meta is not None:
+                m = map_detection(det, meta)
+                if m is not None and not point_in_roi(m["cx"], m["cy"], roi):
+                    color = (0, 0, 200)
+            cv2.rectangle(canvas, (x1, y1), (x2, y2), color, 2)
             cv2.putText(
                 canvas, f"{det['class']} {det['confidence']:.2f}",
                 (x1, max(12, y1 - 4)),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1, cv2.LINE_AA,
+                cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1, cv2.LINE_AA,
             )
         banner = f"{device_id}   count={count}"
         cv2.rectangle(canvas, (0, 0), (canvas.shape[1], 24), (0, 0, 0), -1)
