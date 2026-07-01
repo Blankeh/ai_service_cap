@@ -162,6 +162,10 @@ _EDITOR_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
  .dets rect{fill:none;stroke-width:1.5;vector-effect:non-scaling-stroke}
  .dets circle{r:1.6}
  .dets .in{stroke:#4f8;fill:#4f8} .dets .out{stroke:#888;fill:#888}
+ .detlabels{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+ .detlabels span{position:absolute;font-size:10px;line-height:1;white-space:nowrap;
+   transform:translateY(-2px);text-shadow:0 0 2px #000,0 0 2px #000}
+ .detlabels .in{color:#4f8} .detlabels .out{color:#bbb}
  .hint{color:#789;font-size:11px;margin:6px 0 2px}
  .row{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
  button{background:#264;color:#dfd;border:1px solid #4a6;border-radius:5px;padding:6px 12px;cursor:pointer}
@@ -245,8 +249,12 @@ function makeCard(p, shape){
   // the translucent ROI fill. pointer-events:none — purely visual, never blocks drag.
   const detG = document.createElementNS(SVGNS,"g"); detG.setAttribute("class","dets");
   svg.appendChild(detG);
-  let dets = [];   // latest mapped detections {box:[nx1,ny1,nx2,ny2], cx, cy}
+  let dets = [];   // latest mapped detections {box:[nx1,ny1,nx2,ny2], cx, cy, confidence}
   stage.appendChild(svg);
+  // Confidence labels live in an HTML layer, not the SVG: the overlay's viewBox is
+  // stretched non-uniformly (preserveAspectRatio=none), which would distort <text>.
+  const detLabels = document.createElement("div"); detLabels.className="detlabels";
+  stage.appendChild(detLabels);
   const handles = [];
 
   const toNorm = e=>{ const b=stage.getBoundingClientRect();
@@ -275,10 +283,10 @@ function makeCard(p, shape){
     }
     return inside;
   }
-  // Draw each detection box + center dot, colored by whether its center is inside
-  // the current ROI (counted) — pts is always a polygon in the editor.
+  // Draw each detection: box edges + center dot + a confidence label, colored by
+  // whether its center is inside the current ROI (counted). pts is always a polygon.
   function drawDetections(){
-    detG.textContent = "";
+    detG.textContent = ""; detLabels.textContent = "";
     for(const d of dets){
       const [x1,y1,x2,y2]=d.box;
       const cls = pointInPoly(d.cx,d.cy,pts) ? "in" : "out";
@@ -288,6 +296,12 @@ function makeCard(p, shape){
       const dot=document.createElementNS(SVGNS,"circle"); dot.setAttribute("class",cls);
       dot.setAttribute("cx",d.cx*100); dot.setAttribute("cy",d.cy*100);
       detG.appendChild(rect); detG.appendChild(dot);
+      if(d.confidence!=null){
+        const lab=document.createElement("span"); lab.className=cls;
+        lab.textContent=d.confidence.toFixed(2);
+        lab.style.left=(x1*100)+"%"; lab.style.top=(y1*100)+"%";
+        detLabels.appendChild(lab);
+      }
     }
   }
   async function fetchDetections(){

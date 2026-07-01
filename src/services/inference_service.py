@@ -13,9 +13,18 @@ logger = logging.getLogger(__name__)
 
 
 class InferenceService:
-    def __init__(self, model_path: str, confidence_threshold: float = 0.5):
+    def __init__(
+        self,
+        model_path: str,
+        confidence_threshold: float = 0.5,
+        iou_threshold: float = 0.45,
+    ):
         self.model_path = model_path
         self.confidence_threshold = confidence_threshold
+        # NMS IoU threshold. Ultralytics defaults to 0.7 (loose), which lets two or
+        # three boxes on the SAME head survive → over-counting. A tighter 0.45
+        # merges those duplicates. Lower it further if heads are still double-counted.
+        self.iou_threshold = iou_threshold
         self._model = None  # loaded on first use
         self._lock = threading.Lock()
 
@@ -47,6 +56,7 @@ class InferenceService:
         results = current_model.predict(
             img,
             conf=self.confidence_threshold,
+            iou=self.iou_threshold,
             verbose=False,
         )
         elapsed_ms = (time.perf_counter() - t0) * 1000
@@ -63,8 +73,8 @@ class InferenceService:
 
         crowd_count = len(detections)
         logger.info(
-            "Inference: crowd=%d  conf_threshold=%.2f  elapsed=%.1f ms  img=%dx%d",
-            crowd_count, self.confidence_threshold, elapsed_ms,
+            "Inference: crowd=%d  conf_threshold=%.2f  iou=%.2f  elapsed=%.1f ms  img=%dx%d",
+            crowd_count, self.confidence_threshold, self.iou_threshold, elapsed_ms,
             img.shape[1], img.shape[0],
         )
         if elapsed_ms > 2000:
